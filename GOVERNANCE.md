@@ -52,12 +52,11 @@ Moderators may only act within defined system states and rules.
 Moderators may:
 
 - archive a submission
-- unarchive a submission
 - freeze a submission pending review
 - merge a submission into another after review
 - review and resolve archive appeals
 - attach moderator notes
-- reverse prior moderator actions when justified
+- restore an archived submission only through an upheld appeal or completed reconsideration outcome
 
 Moderators may **not** silently erase ordinary submissions from history.
 
@@ -72,7 +71,7 @@ Archived proposals:
 - remain viewable
 - remain historically auditable
 - remain eligible for appeal
-- may become eligible for return through unarchive logic
+- may become eligible for return through appeal or reconsideration logic
 
 The archive is not intended to function as trash.
 It is a historical and governance-preserving state.
@@ -95,15 +94,17 @@ Moderators should not archive merely because they personally dislike a proposal.
 
 ---
 
-## 6. Unarchive Rules
+## 6. Restoration Rules
 
-A proposal may be unarchived when:
+An archived proposal may be restored when:
 
 - the archive reason is no longer valid
 - a distinction note shows the proposal is not actually a duplicate
 - the proposal now meets minimum quality requirements
 - the original moderation action was mistaken
 - an appeal is upheld
+
+In version 1, this restoration must happen through the appeal or reconsideration process. Moderators do not directly unarchive ordinary submissions outside those documented flows.
 
 ---
 
@@ -191,7 +192,7 @@ Major moderation actions must be logged.
 This includes at minimum:
 
 - archives
-- unarchives
+- restoration outcomes that unarchive a proposal
 - merges
 - freeze actions
 - unfreeze actions

@@ -158,14 +158,35 @@ Later versions may add:
 
 ## Current Status
 
-Planning and specification phase.
+First working prototype in active development.
+
+The core v1 mechanics are being implemented in `site/api` and `site/web`: proposal submission, review unlocks, voting, merge signaling, moderation thresholds, archive behavior, appeals, reconsideration, cycle close, and execution records.
+
+## Deployment Configuration
+
+Local development defaults are built in:
+
+- API: `http://localhost:8080`
+- Web dev server: `http://localhost:5173`
+
+For deployed environments:
+
+- Set `VITE_API_BASE_URL` in the web build to the public API origin.
+- Set `CORS_ALLOWED_ORIGINS` on the API to the deployed web origin, or a comma-separated list of allowed origins.
+- `WEB_ORIGIN` may be used instead of `CORS_ALLOWED_ORIGINS` for a single web origin.
+- Set `APP_ENV=production` or `RUST_ENV=production` so session cookies are marked `Secure` and development-only helpers are disabled.
+- When deployed behind Cloudflare Tunnel, auth rate limits use `CF-Connecting-IP` before falling back to other proxy headers.
+- Keep the API origin reachable only through the tunnel or a trusted proxy so clients cannot spoof those proxy headers directly.
+
+See `docs/deployment.md` for the dev-machine move, environment examples, and Cloudflare Tunnel deployment shape.
 
 ## Repository Structure
 
 docs/
+  deployment.md
   foundation.md
   rules.md
-  srs-v1.md
+  technical-spec-v1.md
 README.md
 ROADMAP.md
 GOVERNANCE.md

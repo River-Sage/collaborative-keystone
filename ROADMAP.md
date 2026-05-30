@@ -19,7 +19,7 @@ Goal: define the system clearly before writing production-grade code.
 - solution submission rules
 - moderation rules
 - merge review rules
-- archive / unarchive rules
+- archive / restoration rules
 - execution tracking minimum requirements
 - public repository with foundational docs
 - initial project structure
@@ -68,7 +68,7 @@ Goal: build a small but real version of Collaborative Keystone for the world loc
 - users can review proposals
 - users can unlock voting
 - users can vote in a cycle
-- moderators can archive / unarchive / merge / review appeals
+- moderators can archive, merge after review, review appeals, and restore eligible proposals only through appeal or reconsideration outcomes
 - results can be published after cycle close
 
 ---

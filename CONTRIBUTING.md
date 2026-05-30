@@ -27,7 +27,7 @@ As the project grows, also read:
 
 - `docs/foundation.md`
 - `docs/rules.md`
-- `docs/srs-v1.md`
+- `technical-spec-v1.md`
 
 Do not assume the project is “just another forum.”
 The mechanism matters more than the surface UI.

@@ -1,0 +1,28 @@
+# Environment and local secrets
+.env
+.env.*
+!.env.example
+!**/.env.example
+
+# Logs
+*.log
+logs/
+.codex-api-logs/
+.codex-web-logs/
+
+# Rust build output
+target/
+target-codex/
+
+# Node/Vite build output
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
