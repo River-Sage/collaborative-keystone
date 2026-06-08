@@ -148,6 +148,14 @@ CYCLE_COMMANDS = (
         description="Clears and reseeds duplicate-link votes, relationships, notes, and reconciliations.",
     ),
     DbCommand(
+        title="Create moderation hold scenario",
+        function_name="New-CkModerationHoldScenario",
+        description=(
+            "Sets two linked water solution proposals above High Moderation-Watch: "
+            "one with a 2-day-old hold timestamp and one freshly stamped for 24-hour hold testing."
+        ),
+    ),
+    DbCommand(
         title="Reset execution tracking facet",
         function_name="Reset-CkExecutionFacet",
         description="Clears solution execution records/results and reactivates demo solution proposals.",

@@ -157,6 +157,8 @@ Version 1 recognizes:
 * **Registered User** — verified email, may complete review unlocks, submit proposals, vote, and appeal if eligible
 * **Moderator** — may act only within specified moderation powers and thresholds
 
+For implementation tracking, moderators also perform steward recordkeeping duties in v1.
+
 Version 1 does not include an app-level Admin role. Deployment ownership, database maintenance, and moderator appointment are operational responsibilities outside the in-app proposal process and must not bypass proposal, voting, merge, archive, appeal, or reconsideration rules.
 
 ### 6.2 Moderator power constraints
@@ -330,11 +332,15 @@ Proposal authors do not select a tracking method and do not submit external trac
 
 When a winning solution becomes an implementation record, each resource entry must support at minimum:
 
+* **Resource Status** (`not_started`, `in_progress`, `secured`, or `blocked`)
 * **Current Acquired Amount**
-* **External Coordination/Acquisition Link**
+* **External Tracking Link**
 * **Status / Proof Note**
+* **Timestamp of last resource update**
 
-In v1, implementation tracking links are added or changed by moderators after a solution wins.
+In v1, implementation tracking links are added or changed by moderator-stewards after a solution wins.
+
+When the target amount and acquired amount are numeric, the interface should display per-resource acquisition progress and remaining amount. Progress is calculated per resource entry because different entries may use incompatible units.
 
 ### 9.4 Supported resource categories in v1
 
@@ -359,6 +365,7 @@ Each completion criterion should support at minimum:
 
 * **Criterion Description**
 * **Completion Status**
+* **Evidence Link**
 * **Evidence / Proof Note**
 * **Timestamp of last status update**
 
@@ -380,6 +387,30 @@ Examples include:
 Collaborative Keystone remains the truth and tracking layer, not necessarily the execution engine itself.
 
 Third-party links belong to implementation records, not ordinary proposal submission. This prevents the live Solution Board from becoming a solicitation surface while still allowing real-world execution to use external tools after a solution is selected.
+
+Keystone does not host implementation evidence files in v1. Spreadsheets, documents, folders, reports, dashboards, and payment/funding records should live in external tools. Keystone stores the external link, the short proof note, the resource or completion criterion it supports, the update timestamp, and moderator-steward interpretation of what the evidence proves.
+
+### 9.7 Moderator-steward procedure in v1
+
+Version 1 does not include separate paid staff, project managers, or implementation steward accounts.
+
+Moderators therefore also act as implementation stewards for v1. This means moderators may maintain the official implementation record after a solution wins, including:
+
+* attaching external tracking links
+* updating acquired resource amounts
+* updating resource and completion statuses
+* adding evidence and proof notes
+* recording a steward update note for the audit trail
+
+External links should be view-only or public wherever possible. If a linked document, folder, spreadsheet, fundraiser, dashboard, or signup tool is not publicly viewable, the moderator-steward note should explain what it is and what has been verified.
+
+Moderator-steward authority is custody of the implementation record, not unilateral final authority over success or failure.
+
+### 9.8 Implementation finality
+
+Moderator-stewards may update implementation progress, resource acquisition values, evidence links, proof notes, and ordinary status values such as `active` or `paused`.
+
+Moderator-stewards may not directly mark an implementation `completed` or `cancelled` in v1. Completion and cancellation require a future claim/review flow or other community-ratified mechanism. Until that mechanism exists, Keystone should track progress without allowing a single moderator to finalize or terminate implementation status.
 
 ---
 
@@ -813,13 +844,15 @@ A proposal enters **High Moderation-Watch** if any of the following are true:
 
 Moderators may not archive, freeze, or otherwise moderate active proposal content until High Moderation-Watch has been reached.
 
+High Moderation-Watch must remain continuously active for **24 hours** before any harmful moderation action is available. If the proposal drops below High Moderation-Watch before the hold completes, the hold resets.
+
 Merge actions are governed by the separate High Merge-Watch threshold and require an explicit merge relationship between the proposals.
 
 Before that, moderators may observe flags and queue data only.
 
 ### 19.4 Consequences of High Moderation-Watch
 
-When High Moderation-Watch is reached, moderators may:
+When High Moderation-Watch has remained active for the required 24-hour hold, moderators may:
 
 * archive the proposal
 * freeze the proposal pending review
@@ -1021,6 +1054,8 @@ If there is no published winning issue from a prior cycle, the Solution Board ha
 The winning solution must become an implementation tracking record without requiring re-entry of structured implementation data.
 
 This is possible because the required execution fields already exist at submission time.
+
+The normal product workflow must not expose manual implementation promotion from an ordinary solution detail view. Implementations are created by the same cycle-close mechanic that moves a winning issue into the next Solution Board target: the prior cycle's winning solution becomes the active implementation record. Any direct moderator-steward creation path is a recovery tool only and must still require a published winning solution result.
 
 ### 26.4 Cycle close archival
 

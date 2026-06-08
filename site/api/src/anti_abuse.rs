@@ -44,8 +44,7 @@ pub struct AntiAbuseResolveResponse {
 #[derive(Debug, Serialize)]
 pub struct AntiAbuseFlagSummary {
     pub id: Uuid,
-    pub user_id: Option<Uuid>,
-    pub user_email: Option<String>,
+    pub user_public_id: Option<String>,
     pub flag_code: String,
     pub severity: String,
     pub status: String,
@@ -134,8 +133,10 @@ pub async fn anti_abuse_review_queue_handler(
         r#"
         SELECT
             f.id,
-            f.user_id,
-            u.email AS user_email,
+            CASE
+                WHEN f.user_id IS NULL THEN NULL
+                ELSE 'user-' || LEFT(REPLACE(f.user_id::text, '-', ''), 10)
+            END AS user_public_id,
             f.flag_code,
             f.severity,
             f.status,
@@ -151,7 +152,6 @@ pub async fn anti_abuse_review_queue_handler(
             f.reviewed_by_moderator_user_id,
             f.resolution_note
         FROM anti_abuse_flags f
-        LEFT JOIN users u ON u.id = f.user_id
         LEFT JOIN proposals p ON p.id = f.proposal_id
         LEFT JOIN proposals rp ON rp.id = f.related_proposal_id
         WHERE f.status = 'open'
@@ -659,8 +659,7 @@ fn is_low_value_client_hint(value: &str) -> bool {
 fn map_flag_row(row: sqlx::postgres::PgRow) -> Result<AntiAbuseFlagSummary, AppError> {
     Ok(AntiAbuseFlagSummary {
         id: row.try_get("id").map_err(internal_db_err)?,
-        user_id: row.try_get("user_id").map_err(internal_db_err)?,
-        user_email: row.try_get("user_email").map_err(internal_db_err)?,
+        user_public_id: row.try_get("user_public_id").map_err(internal_db_err)?,
         flag_code: row.try_get("flag_code").map_err(internal_db_err)?,
         severity: row.try_get("severity").map_err(internal_db_err)?,
         status: row.try_get("status").map_err(internal_db_err)?,

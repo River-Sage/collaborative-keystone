@@ -15,6 +15,10 @@
   --ink-muted: #657282;
   --accent: #0f766e;
   --accent-soft: #eef8f6;
+  --moderator: #c25a10;
+  --moderator-soft: #fff5ea;
+  --moderator-line: #efc090;
+  --moderator-ink: #78350f;
 }
 
 * {
@@ -378,6 +382,11 @@ code {
   border-top: 2px solid #17212b;
 }
 
+.moderator-surface {
+  border-top-color: var(--moderator);
+  box-shadow: 0 12px 28px rgba(194, 90, 16, 0.08);
+}
+
 .panel-header {
   display: flex;
   flex-direction: column;
@@ -492,6 +501,22 @@ code {
   margin-top: 12px;
   color: #506272;
   font-size: 0.92rem;
+}
+
+.moderator-threshold-counts {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  padding: 9px 12px;
+  background: var(--moderator-soft);
+  border: 1px solid var(--moderator-line);
+  border-radius: var(--radius-control);
+  color: var(--moderator-ink);
+}
+
+.moderator-threshold-counts strong {
+  color: var(--moderator-ink);
+  font-weight: 700;
 }
 
 .state-pill {
@@ -619,6 +644,17 @@ code {
   font-weight: 400;
 }
 
+.moderator-box button {
+  background: #fffaf4;
+  border-color: var(--moderator-line);
+  color: var(--moderator-ink);
+}
+
+.moderator-box button:hover {
+  background: #fff1df;
+  border-color: var(--moderator);
+}
+
 .active-choice {
   background: #eef5fa !important;
   border-color: #9fb9ca !important;
@@ -670,6 +706,16 @@ code {
   text-align: left;
 }
 
+.structured-fieldset.section-attention {
+  background: #fffdf4;
+  border-color: #edce75;
+}
+
+.structured-fieldset.section-complete {
+  background: #fbfffc;
+  border-color: #bdddc8;
+}
+
 .structured-fieldset legend,
 .structured-fieldset-heading span {
   color: #314252;
@@ -701,6 +747,18 @@ code {
   box-shadow: 0 6px 16px rgba(41, 62, 84, 0.04);
 }
 
+.section-item-attention {
+  background: #fffaf2;
+  border-color: #efb860;
+  border-left-color: #efb860;
+}
+
+.section-item-complete {
+  background: #fbfffc;
+  border-color: #bdddc8;
+  border-left-color: #bdddc8;
+}
+
 .structured-item-header {
   display: flex;
   align-items: center;
@@ -714,11 +772,17 @@ code {
   width: 28px;
   height: 28px;
   border-radius: 50%;
-  background: #eef8f2;
-  border: 1px solid #bdddc8;
-  color: #3f6d4f;
+  background: #fff1d6;
+  border: 1px solid #efb860;
+  color: #8a4708;
   font-size: 0.86rem;
   font-weight: 400;
+}
+
+.structured-index-complete {
+  background: #eef8f2;
+  border-color: #bdddc8;
+  color: #3f6d4f;
 }
 
 .structured-row {
@@ -755,6 +819,26 @@ code {
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
+  padding: 10px;
+  border: 1px solid #d8e3eb;
+  border-left: 4px solid #efb860;
+  border-radius: var(--radius-panel);
+}
+
+.section-status-pill {
+  border-color: #d5e1e9;
+}
+
+.section-status-attention {
+  background: #fff1d6;
+  border-color: #efb860;
+  color: #8a4708;
+}
+
+.section-status-complete {
+  background: #eef8f2;
+  border-color: #bdddc8;
+  color: #3f6d4f;
 }
 
 .detail-card {
@@ -800,6 +884,136 @@ code {
   padding: 14px;
   background: #fbfdff;
   text-align: center;
+}
+
+.resource-tracking-summary {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin: 8px 0 4px;
+}
+
+.resource-tracking-card {
+  display: grid;
+  gap: 10px;
+  text-align: left;
+}
+
+.resource-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.resource-card-header strong {
+  color: #263545;
+  font-weight: 500;
+}
+
+.resource-status-pill {
+  border-color: #d5e1e9;
+}
+
+.resource-status-not_started {
+  background: #fff8df;
+  border-color: #edce75;
+  color: #765108;
+}
+
+.resource-status-in_progress {
+  background: #fff1d6;
+  border-color: #efb860;
+  color: #8a4708;
+}
+
+.resource-status-secured {
+  background: #eef8f2;
+  border-color: #bdddc8;
+  color: #3f6d4f;
+}
+
+.resource-status-blocked {
+  background: #fff0e8;
+  border-color: #e79a6a;
+  color: #8a3413;
+}
+
+.completion-status-pill {
+  border-color: #d5e1e9;
+}
+
+.completion-status-not_started {
+  background: #fff8df;
+  border-color: #edce75;
+  color: #765108;
+}
+
+.completion-status-in_progress {
+  background: #fff1d6;
+  border-color: #efb860;
+  color: #8a4708;
+}
+
+.completion-status-blocked {
+  background: #fff0e8;
+  border-color: #e79a6a;
+  color: #8a3413;
+}
+
+.completion-status-completed {
+  background: #eef8f2;
+  border-color: #bdddc8;
+  color: #3f6d4f;
+}
+
+.status-coded-card {
+  border-left: 4px solid #edce75;
+}
+
+.status-card-not_started {
+  background: #fffdf4;
+  border-left-color: #edce75;
+}
+
+.status-card-in_progress {
+  background: #fffaf2;
+  border-left-color: #efb860;
+}
+
+.status-card-blocked {
+  background: #fff7f0;
+  border-left-color: #e79a6a;
+}
+
+.status-card-completed,
+.status-card-secured {
+  background: #fbfffc;
+  border-left-color: #bdddc8;
+}
+
+.resource-progress {
+  display: grid;
+  gap: 6px;
+}
+
+.resource-progress-track {
+  width: 100%;
+  height: 10px;
+  overflow: hidden;
+  border: 1px solid #d5e1e9;
+  border-radius: 999px;
+  background: #eef4f8;
+}
+
+.resource-progress-fill {
+  display: block;
+  width: var(--resource-progress, 0%);
+  height: 100%;
+  border-radius: inherit;
+  background: #4f8f61;
 }
 
 .error-box {
@@ -1095,7 +1309,10 @@ strong {
 }
 
 .tab-button-moderator {
-  border-style: dashed;
+  background: var(--moderator-soft);
+  border-color: var(--moderator-line);
+  border-style: solid;
+  color: var(--moderator-ink);
 }
 
 .tab-button:hover {
@@ -1107,6 +1324,13 @@ strong {
   background: var(--accent-soft);
   border-color: var(--accent);
   color: #123c39;
+}
+
+.tab-button-moderator.active {
+  background: var(--moderator);
+  border-color: var(--moderator);
+  color: #ffffff;
+  box-shadow: 0 10px 24px rgba(194, 90, 16, 0.16);
 }
 
 .tab-button-primary.active {
@@ -1137,6 +1361,27 @@ strong {
   border-radius: var(--radius-panel);
 }
 
+.moderator-box {
+  background: var(--moderator-soft);
+  border-color: var(--moderator-line);
+  box-shadow: 0 10px 22px rgba(194, 90, 16, 0.08);
+}
+
+.moderator-box h4 {
+  color: var(--moderator-ink);
+  font-weight: 700;
+}
+
+.moderator-box .moderation-field {
+  color: var(--moderator-ink);
+}
+
+.moderator-box .moderation-field select,
+.moderator-box .moderation-field input,
+.moderator-box .moderation-field textarea {
+  border-color: var(--moderator-line);
+}
+
 .moderation-field {
   display: grid;
   gap: 8px;
@@ -1162,6 +1407,12 @@ strong {
   resize: vertical;
   min-height: 110px;
   text-align: left;
+}
+
+.field-hint {
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.35;
 }
 
 .success-box {

@@ -85,6 +85,7 @@ pub async fn create_execution_record_handler(
     Path(solution_proposal_id): Path<Uuid>,
 ) -> Result<(StatusCode, Json<CreateExecutionRecordResponse>), AppError> {
     require_moderator(&auth_user)?;
+    ensure_solution_has_published_cycle_result(&state.db, solution_proposal_id).await?;
 
     let execution_record = create_execution_record_from_solution(
         &state.db,
@@ -134,7 +135,17 @@ pub async fn create_execution_record_from_solution(
         JOIN locales l ON l.id = p.locale_id
         WHERE p.id = $1
           AND l.slug = 'world'
-          AND c.is_active = TRUE
+          AND (
+            c.is_active = TRUE
+            OR EXISTS (
+                SELECT 1
+                FROM cycle_results cr
+                WHERE cr.board_code = 'solution'
+                  AND cr.result_status = 'resolved'
+                  AND cr.winning_proposal_id = p.id
+                  AND cr.published_at IS NOT NULL
+            )
+          )
         LIMIT 1
         "#,
     )
@@ -160,9 +171,10 @@ pub async fn create_execution_record_from_solution(
     }
 
     let primary_state: String = solution.try_get("primary_state").map_err(internal_db_err)?;
-    if primary_state != "active" && primary_state != "ranked" {
+    if primary_state != "active" && primary_state != "ranked" && primary_state != "archived" {
         return Err(AppError::BadRequest(
-            "Only active solution proposals can become execution records.".to_string(),
+            "Only active or published winning solution proposals can become execution records."
+                .to_string(),
         ));
     }
 
@@ -285,6 +297,43 @@ pub async fn create_execution_record_from_solution(
     load_execution_record(db, execution_record_id).await
 }
 
+async fn ensure_solution_has_published_cycle_result(
+    db: &sqlx::PgPool,
+    solution_proposal_id: Uuid,
+) -> Result<(), AppError> {
+    let row = sqlx::query(
+        r#"
+        SELECT EXISTS (
+            SELECT 1
+            FROM cycle_results
+            WHERE board_code = 'solution'
+              AND result_status = 'resolved'
+              AND winning_proposal_id = $1
+              AND published_at IS NOT NULL
+        ) AS exists_flag
+        "#,
+    )
+    .bind(solution_proposal_id)
+    .fetch_one(db)
+    .await
+    .map_err(|err| {
+        error!(
+            "database error checking solution cycle result before implementation creation: {}",
+            err
+        );
+        AppError::Internal("Failed to create execution record.".to_string())
+    })?;
+
+    let exists: bool = row.try_get("exists_flag").map_err(internal_db_err)?;
+    if exists {
+        return Ok(());
+    }
+
+    Err(AppError::Forbidden(
+        "Implementation records are created from published winning solution results.".to_string(),
+    ))
+}
+
 pub async fn list_execution_records_handler(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ExecutionRecordListResponse>, AppError> {
@@ -400,6 +449,12 @@ pub async fn update_execution_record_handler(
             ));
         }
     };
+
+    if status != previous_status && (status == "completed" || status == "cancelled") {
+        return Err(AppError::BadRequest(
+            "Implementation completion and cancellation require a claim/review flow, not a direct moderator-steward status update.".to_string(),
+        ));
+    }
 
     let completion_criteria = match payload.completion_criteria {
         Some(value) => validate_completion_criteria_value(value)?,
@@ -678,6 +733,13 @@ fn validate_completion_criteria_value(value: Value) -> Result<Value, AppError> {
             object,
             "completion_criteria",
             index,
+            "evidence_link",
+            MAX_LINK_CHARS,
+        )?;
+        validate_object_text_or_empty_max(
+            object,
+            "completion_criteria",
+            index,
             "evidence_note",
             MAX_NOTE_CHARS,
         )?;
@@ -747,6 +809,18 @@ fn validate_execution_tracking_entries_value(value: Value) -> Result<Value, AppE
             "current_acquired_amount",
             MAX_RESOURCE_AMOUNT_CHARS,
         )?;
+        if let Some(status) = optional_object_text(
+            object,
+            "execution_tracking_entries",
+            index,
+            "resource_status",
+        )? {
+            if !is_valid_resource_status(status) {
+                return Err(AppError::BadRequest(format!(
+                    "execution_tracking_entries[{index}].resource_status must be one of: not_started, in_progress, secured, blocked."
+                )));
+            }
+        }
         validate_object_text_or_empty_max(
             object,
             "execution_tracking_entries",
@@ -760,6 +834,13 @@ fn validate_execution_tracking_entries_value(value: Value) -> Result<Value, AppE
             index,
             "status_proof_note",
             MAX_NOTE_CHARS,
+        )?;
+        validate_optional_object_text_max(
+            object,
+            "execution_tracking_entries",
+            index,
+            "resource_updated_at",
+            MAX_TIMESTAMP_CHARS,
         )?;
     }
 
@@ -790,6 +871,21 @@ fn require_object_text<'a>(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| AppError::BadRequest(format!("{field_name}[{index}].{key} is required.")))
+}
+
+fn optional_object_text<'a>(
+    object: &'a serde_json::Map<String, Value>,
+    field_name: &str,
+    index: usize,
+    key: &str,
+) -> Result<Option<&'a str>, AppError> {
+    match object.get(key) {
+        Some(Value::String(value)) => Ok(Some(value.trim())),
+        Some(Value::Null) | None => Ok(None),
+        _ => Err(AppError::BadRequest(format!(
+            "{field_name}[{index}].{key} must be a text field."
+        ))),
+    }
 }
 
 fn validate_text_max_chars(
@@ -898,6 +994,10 @@ fn is_supported_resource_category(value: &str) -> bool {
             | "organizational support"
             | "other"
     )
+}
+
+fn is_valid_resource_status(value: &str) -> bool {
+    matches!(value, "not_started" | "in_progress" | "secured" | "blocked")
 }
 
 fn is_valid_completion_item_status(value: &str) -> bool {

@@ -1105,52 +1105,71 @@ async fn seed_merge_watch_notifications(db: &PgPool) -> Result<(), sqlx::Error> 
 async fn refresh_vote_counts(db: &PgPool, proposal_id: Uuid) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"
-        UPDATE proposals
+        WITH counts AS (
+            SELECT
+                (
+                    SELECT COUNT(*)::int
+                    FROM proposal_sentiment_votes
+                    WHERE proposal_id = $1
+                      AND vote_value = 'support'
+                ) AS support_count,
+                (
+                    SELECT COUNT(*)::int
+                    FROM proposal_sentiment_votes
+                    WHERE proposal_id = $1
+                      AND vote_value = 'not_a_fit'
+                ) AS not_a_fit_count,
+                (
+                    SELECT COUNT(*)::int
+                    FROM proposal_sentiment_votes
+                    WHERE proposal_id = $1
+                      AND vote_value = 'unclear'
+                ) AS unclear_count,
+                (
+                    SELECT COUNT(*)::int
+                    FROM proposal_sentiment_votes
+                    WHERE proposal_id = $1
+                      AND vote_value = 'unsafe'
+                ) AS unsafe_count,
+                (
+                    SELECT COUNT(*)::int
+                    FROM proposal_merge_votes mv
+                    WHERE mv.proposal_id = $1
+                      AND mv.target_proposal_id IS NOT NULL
+                      AND EXISTS (
+                        SELECT 1
+                        FROM proposals target
+                        WHERE target.id = mv.target_proposal_id
+                          AND target.primary_state = 'active'
+                      )
+                      AND EXISTS (
+                        SELECT 1
+                        FROM proposal_merge_relationships r
+                        WHERE r.source_proposal_id = mv.proposal_id
+                          AND r.target_proposal_id = mv.target_proposal_id
+                          AND r.status = 'active'
+                      )
+                ) AS merge_count
+        )
+        UPDATE proposals p
         SET
-            support_count = (
-                SELECT COUNT(*)::int
-                FROM proposal_sentiment_votes
-                WHERE proposal_id = $1
-                  AND vote_value = 'support'
-            ),
-            not_a_fit_count = (
-                SELECT COUNT(*)::int
-                FROM proposal_sentiment_votes
-                WHERE proposal_id = $1
-                  AND vote_value = 'not_a_fit'
-            ),
-            unclear_count = (
-                SELECT COUNT(*)::int
-                FROM proposal_sentiment_votes
-                WHERE proposal_id = $1
-                  AND vote_value = 'unclear'
-            ),
-            unsafe_count = (
-                SELECT COUNT(*)::int
-                FROM proposal_sentiment_votes
-                WHERE proposal_id = $1
-                  AND vote_value = 'unsafe'
-            ),
-            merge_count = (
-                SELECT COUNT(*)::int
-                FROM proposal_merge_votes mv
-                WHERE mv.proposal_id = $1
-                  AND mv.target_proposal_id IS NOT NULL
-                  AND EXISTS (
-                    SELECT 1
-                    FROM proposals target
-                    WHERE target.id = mv.target_proposal_id
-                      AND target.primary_state = 'active'
+            support_count = counts.support_count,
+            not_a_fit_count = counts.not_a_fit_count,
+            unclear_count = counts.unclear_count,
+            unsafe_count = counts.unsafe_count,
+            merge_count = counts.merge_count,
+            high_moderation_watch_started_at = CASE
+                WHEN counts.unsafe_count >= 8
+                  OR (
+                    (counts.support_count + counts.not_a_fit_count + counts.unclear_count + counts.unsafe_count + counts.merge_count) > 0
+                    AND counts.unsafe_count::numeric
+                        / (counts.support_count + counts.not_a_fit_count + counts.unclear_count + counts.unsafe_count + counts.merge_count)::numeric >= 0.35
                   )
-                  AND EXISTS (
-                    SELECT 1
-                    FROM proposal_merge_relationships r
-                    WHERE r.source_proposal_id = mv.proposal_id
-                      AND r.target_proposal_id = mv.target_proposal_id
-                      AND r.status = 'active'
-                  )
-            )
-        WHERE id = $1
+                THEN COALESCE(p.high_moderation_watch_started_at, NOW())
+                ELSE NULL
+            END
+        FROM counts
+        WHERE p.id = $1
         "#,
     )
     .bind(proposal_id)

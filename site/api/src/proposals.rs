@@ -5,7 +5,7 @@ use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::Row;
@@ -32,6 +32,7 @@ const MAX_RESOURCE_TARGET_CHARS: usize = 140;
 const MAX_NOTE_CHARS: usize = 2000;
 const MAX_LINK_CHARS: usize = 2048;
 const MAX_TIMESTAMP_CHARS: usize = 64;
+const MODERATION_THRESHOLD_HOLD_HOURS: i64 = 24;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -281,6 +282,8 @@ pub struct ProposalSummary {
     pub execution_tracking_entries: Option<Value>,
 
     pub created_at: DateTime<Utc>,
+    #[serde(skip_serializing)]
+    pub high_moderation_watch_started_at: Option<DateTime<Utc>>,
 
     #[serde(skip_serializing)]
     pub review_action_count: i64,
@@ -506,6 +509,25 @@ impl ProposalCounts {
             "total_count": self.total_count()
         })
     }
+}
+
+fn high_moderation_hold_ready(started_at: Option<DateTime<Utc>>) -> bool {
+    started_at
+        .map(|value| {
+            Utc::now().signed_duration_since(value)
+                >= Duration::hours(MODERATION_THRESHOLD_HOLD_HOURS)
+        })
+        .unwrap_or(false)
+}
+
+fn require_high_moderation_hold_ready(started_at: Option<DateTime<Utc>>) -> Result<(), AppError> {
+    if high_moderation_hold_ready(started_at) {
+        return Ok(());
+    }
+
+    Err(AppError::Forbidden(format!(
+        "Proposal must remain over the high moderation threshold for {MODERATION_THRESHOLD_HOLD_HOURS} hours before moderation action."
+    )))
 }
 
 pub async fn create_proposal_handler(
@@ -983,6 +1005,7 @@ pub async fn get_proposal_handler(
             p.unclear_count,
             p.unsafe_count,
             p.merge_count,
+            p.high_moderation_watch_started_at,
             p.problem_description,
             p.affected_scope,
             p.why_it_matters,
@@ -1408,6 +1431,7 @@ pub async fn moderate_archive_handler(
             p.unclear_count,
             p.unsafe_count,
             p.merge_count,
+            p.high_moderation_watch_started_at,
             EXISTS (
                 SELECT 1
                 FROM proposal_watch_flags wf
@@ -1469,6 +1493,12 @@ pub async fn moderate_archive_handler(
         return Err(AppError::Forbidden(
             "Proposal has not reached the moderation action threshold.".to_string(),
         ));
+    }
+    if !frozen_for_review {
+        let threshold_started_at: Option<DateTime<Utc>> = current
+            .try_get("high_moderation_watch_started_at")
+            .map_err(internal_db_err)?;
+        require_high_moderation_hold_ready(threshold_started_at)?;
     }
 
     let row = sqlx::query(
@@ -1563,6 +1593,7 @@ pub async fn moderate_freeze_handler(
             p.unclear_count,
             p.unsafe_count,
             p.merge_count,
+            p.high_moderation_watch_started_at,
             EXISTS (
                 SELECT 1
                 FROM proposal_watch_flags wf
@@ -1633,6 +1664,10 @@ pub async fn moderate_freeze_handler(
             "Proposal has not reached the moderation action threshold.".to_string(),
         ));
     }
+    let threshold_started_at: Option<DateTime<Utc>> = current
+        .try_get("high_moderation_watch_started_at")
+        .map_err(internal_db_err)?;
+    require_high_moderation_hold_ready(threshold_started_at)?;
 
     let row = sqlx::query(
         r#"
@@ -1719,6 +1754,7 @@ pub async fn moderate_unfreeze_handler(
             p.unclear_count,
             p.unsafe_count,
             p.merge_count,
+            p.high_moderation_watch_started_at,
             EXISTS (
                 SELECT 1
                 FROM proposal_watch_flags wf
@@ -1837,6 +1873,7 @@ pub async fn moderate_reviewed_active_handler(
             p.unclear_count,
             p.unsafe_count,
             p.merge_count,
+            p.high_moderation_watch_started_at,
             EXISTS (
                 SELECT 1
                 FROM proposal_watch_flags wf
@@ -1900,6 +1937,12 @@ pub async fn moderate_reviewed_active_handler(
         return Err(AppError::Forbidden(
             "Proposal has not reached the moderation action threshold.".to_string(),
         ));
+    }
+    if !frozen_for_review {
+        let threshold_started_at: Option<DateTime<Utc>> = current
+            .try_get("high_moderation_watch_started_at")
+            .map_err(internal_db_err)?;
+        require_high_moderation_hold_ready(threshold_started_at)?;
     }
 
     let row = sqlx::query(
@@ -2033,6 +2076,7 @@ pub async fn review_queue_handler(
             p.unclear_count,
             p.unsafe_count,
             p.merge_count,
+            p.high_moderation_watch_started_at,
             p.problem_description,
             p.affected_scope,
             p.why_it_matters,
@@ -2166,8 +2210,12 @@ pub async fn review_queue_handler(
 
         let review_reason = if frozen_for_review {
             "frozen_review".to_string()
-        } else if counts.high_moderation_watch() {
+        } else if counts.high_moderation_watch()
+            && high_moderation_hold_ready(proposal.high_moderation_watch_started_at)
+        {
             "high_moderation_review".to_string()
+        } else if counts.high_moderation_watch() {
+            "high_moderation_hold".to_string()
         } else if counts.moderation_watch() {
             "moderation_watch_review".to_string()
         } else if counts.merge_watch() {
@@ -3433,6 +3481,7 @@ fn map_winning_proposal_from_result_row(
             .try_get::<Option<DateTime<Utc>>, _>("winner_created_at")
             .map_err(internal_db_err)?
             .ok_or_else(|| required("created_at"))?,
+        high_moderation_watch_started_at: None,
         review_action_count: 0,
         cycle_average_review_action_count: 0.0,
     }))
@@ -3558,6 +3607,9 @@ fn map_one_proposal_row(row: sqlx::postgres::PgRow) -> Result<ProposalSummary, A
             .try_get("execution_tracking_entries")
             .map_err(internal_db_err)?,
         created_at: row.try_get("created_at").map_err(internal_db_err)?,
+        high_moderation_watch_started_at: row
+            .try_get("high_moderation_watch_started_at")
+            .unwrap_or(None),
         review_action_count: row.try_get("review_action_count").unwrap_or(0),
         cycle_average_review_action_count: row
             .try_get("cycle_average_review_action_count")
@@ -4127,52 +4179,71 @@ async fn refresh_proposal_vote_counts_tx(
 ) -> Result<(), AppError> {
     sqlx::query(
         r#"
-        UPDATE proposals
+        WITH counts AS (
+            SELECT
+                (
+                    SELECT COUNT(*)::int
+                    FROM proposal_sentiment_votes
+                    WHERE proposal_id = $1
+                      AND vote_value = 'support'
+                ) AS support_count,
+                (
+                    SELECT COUNT(*)::int
+                    FROM proposal_sentiment_votes
+                    WHERE proposal_id = $1
+                      AND vote_value = 'not_a_fit'
+                ) AS not_a_fit_count,
+                (
+                    SELECT COUNT(*)::int
+                    FROM proposal_sentiment_votes
+                    WHERE proposal_id = $1
+                      AND vote_value = 'unclear'
+                ) AS unclear_count,
+                (
+                    SELECT COUNT(*)::int
+                    FROM proposal_sentiment_votes
+                    WHERE proposal_id = $1
+                      AND vote_value = 'unsafe'
+                ) AS unsafe_count,
+                (
+                    SELECT COUNT(*)::int
+                    FROM proposal_merge_votes mv
+                    WHERE mv.proposal_id = $1
+                      AND mv.target_proposal_id IS NOT NULL
+                      AND EXISTS (
+                        SELECT 1
+                        FROM proposals target
+                        WHERE target.id = mv.target_proposal_id
+                          AND target.primary_state = 'active'
+                      )
+                      AND EXISTS (
+                        SELECT 1
+                        FROM proposal_merge_relationships r
+                        WHERE r.source_proposal_id = mv.proposal_id
+                          AND r.target_proposal_id = mv.target_proposal_id
+                          AND r.status = 'active'
+                      )
+                ) AS merge_count
+        )
+        UPDATE proposals p
         SET
-            support_count = (
-                SELECT COUNT(*)::int
-                FROM proposal_sentiment_votes
-                WHERE proposal_id = $1
-                  AND vote_value = 'support'
-            ),
-            not_a_fit_count = (
-                SELECT COUNT(*)::int
-                FROM proposal_sentiment_votes
-                WHERE proposal_id = $1
-                  AND vote_value = 'not_a_fit'
-            ),
-            unclear_count = (
-                SELECT COUNT(*)::int
-                FROM proposal_sentiment_votes
-                WHERE proposal_id = $1
-                  AND vote_value = 'unclear'
-            ),
-            unsafe_count = (
-                SELECT COUNT(*)::int
-                FROM proposal_sentiment_votes
-                WHERE proposal_id = $1
-                  AND vote_value = 'unsafe'
-            ),
-            merge_count = (
-                SELECT COUNT(*)::int
-                FROM proposal_merge_votes mv
-                WHERE mv.proposal_id = $1
-                  AND mv.target_proposal_id IS NOT NULL
-                  AND EXISTS (
-                    SELECT 1
-                    FROM proposals target
-                    WHERE target.id = mv.target_proposal_id
-                      AND target.primary_state = 'active'
+            support_count = counts.support_count,
+            not_a_fit_count = counts.not_a_fit_count,
+            unclear_count = counts.unclear_count,
+            unsafe_count = counts.unsafe_count,
+            merge_count = counts.merge_count,
+            high_moderation_watch_started_at = CASE
+                WHEN counts.unsafe_count >= 8
+                  OR (
+                    (counts.support_count + counts.not_a_fit_count + counts.unclear_count + counts.unsafe_count + counts.merge_count) > 0
+                    AND counts.unsafe_count::numeric
+                        / (counts.support_count + counts.not_a_fit_count + counts.unclear_count + counts.unsafe_count + counts.merge_count)::numeric >= 0.35
                   )
-                  AND EXISTS (
-                    SELECT 1
-                    FROM proposal_merge_relationships r
-                    WHERE r.source_proposal_id = mv.proposal_id
-                      AND r.target_proposal_id = mv.target_proposal_id
-                      AND r.status = 'active'
-                  )
-            )
-        WHERE id = $1
+                THEN COALESCE(p.high_moderation_watch_started_at, NOW())
+                ELSE NULL
+            END
+        FROM counts
+        WHERE p.id = $1
         "#,
     )
     .bind(proposal_id)
@@ -4373,6 +4444,13 @@ fn validate_completion_criteria(value: Option<&Value>) -> Result<(), AppError> {
             object,
             "completion_criteria",
             index,
+            "evidence_link",
+            MAX_LINK_CHARS,
+        )?;
+        validate_object_text_or_empty_max(
+            object,
+            "completion_criteria",
+            index,
             "evidence_note",
             MAX_NOTE_CHARS,
         )?;
@@ -4444,6 +4522,18 @@ fn validate_execution_tracking_entries(value: Option<&Value>) -> Result<(), AppE
             "current_acquired_amount",
             MAX_RESOURCE_AMOUNT_CHARS,
         )?;
+        if let Some(status) = optional_object_text(
+            object,
+            "execution_tracking_entries",
+            index,
+            "resource_status",
+        )? {
+            if !is_valid_resource_status(status) {
+                return Err(AppError::BadRequest(format!(
+                    "execution_tracking_entries[{index}].resource_status must be one of: not_started, in_progress, secured, blocked."
+                )));
+            }
+        }
         validate_object_text_or_empty_max(
             object,
             "execution_tracking_entries",
@@ -4457,6 +4547,13 @@ fn validate_execution_tracking_entries(value: Option<&Value>) -> Result<(), AppE
             index,
             "status_proof_note",
             MAX_NOTE_CHARS,
+        )?;
+        validate_optional_object_text_max(
+            object,
+            "execution_tracking_entries",
+            index,
+            "resource_updated_at",
+            MAX_TIMESTAMP_CHARS,
         )?;
     }
 
@@ -4487,6 +4584,21 @@ fn require_object_text<'a>(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| AppError::BadRequest(format!("{field_name}[{index}].{key} is required.")))
+}
+
+fn optional_object_text<'a>(
+    object: &'a serde_json::Map<String, Value>,
+    field_name: &str,
+    index: usize,
+    key: &str,
+) -> Result<Option<&'a str>, AppError> {
+    match object.get(key) {
+        Some(Value::String(value)) => Ok(Some(value.trim())),
+        Some(Value::Null) | None => Ok(None),
+        _ => Err(AppError::BadRequest(format!(
+            "{field_name}[{index}].{key} must be a text field."
+        ))),
+    }
 }
 
 fn validate_object_text_or_empty_max(
@@ -4581,6 +4693,10 @@ fn is_supported_resource_category(value: &str) -> bool {
             | "organizational support"
             | "other"
     )
+}
+
+fn is_valid_resource_status(value: &str) -> bool {
+    matches!(value, "not_started" | "in_progress" | "secured" | "blocked")
 }
 
 fn is_valid_completion_status(value: &str) -> bool {

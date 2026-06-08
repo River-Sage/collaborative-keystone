@@ -50,8 +50,7 @@ function Invoke-CkSql {
 
     $psql = Get-CkPsql
     $databaseUrl = Get-CkDatabaseUrl
-    $tmp = Join-Path $RepoRoot "target-codex\ck-dev-sql-$(Get-Random).sql"
-    New-Item -ItemType Directory -Force -Path (Split-Path $tmp) | Out-Null
+    $tmp = Join-Path $RepoRoot ".ck-dev-sql-$(Get-Random).sql"
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     [System.IO.File]::WriteAllText($tmp, $Sql, $utf8NoBom)
 
@@ -79,51 +78,73 @@ function Invoke-CkDemoSeeder {
 
 function Get-CkRefreshCountsSql {
 @'
+WITH counts AS (
+    SELECT
+        p.id,
+        (
+            SELECT COUNT(*)::int
+            FROM proposal_sentiment_votes v
+            WHERE v.proposal_id = p.id
+              AND v.vote_value = 'support'
+        ) AS support_count,
+        (
+            SELECT COUNT(*)::int
+            FROM proposal_sentiment_votes v
+            WHERE v.proposal_id = p.id
+              AND v.vote_value = 'not_a_fit'
+        ) AS not_a_fit_count,
+        (
+            SELECT COUNT(*)::int
+            FROM proposal_sentiment_votes v
+            WHERE v.proposal_id = p.id
+              AND v.vote_value = 'unclear'
+        ) AS unclear_count,
+        (
+            SELECT COUNT(*)::int
+            FROM proposal_sentiment_votes v
+            WHERE v.proposal_id = p.id
+              AND v.vote_value = 'unsafe'
+        ) AS unsafe_count,
+        (
+            SELECT COUNT(*)::int
+            FROM proposal_merge_votes mv
+            WHERE mv.proposal_id = p.id
+              AND mv.target_proposal_id IS NOT NULL
+              AND EXISTS (
+                  SELECT 1
+                  FROM proposals target
+                  WHERE target.id = mv.target_proposal_id
+                    AND target.primary_state = 'active'
+              )
+              AND EXISTS (
+                  SELECT 1
+                  FROM proposal_merge_relationships r
+                  WHERE r.source_proposal_id = mv.proposal_id
+                    AND r.target_proposal_id = mv.target_proposal_id
+                    AND r.status = 'active'
+              )
+        ) AS merge_count
+    FROM proposals p
+)
 UPDATE proposals p
 SET
-    support_count = (
-        SELECT COUNT(*)::int
-        FROM proposal_sentiment_votes v
-        WHERE v.proposal_id = p.id
-          AND v.vote_value = 'support'
-    ),
-    not_a_fit_count = (
-        SELECT COUNT(*)::int
-        FROM proposal_sentiment_votes v
-        WHERE v.proposal_id = p.id
-          AND v.vote_value = 'not_a_fit'
-    ),
-    unclear_count = (
-        SELECT COUNT(*)::int
-        FROM proposal_sentiment_votes v
-        WHERE v.proposal_id = p.id
-          AND v.vote_value = 'unclear'
-    ),
-    unsafe_count = (
-        SELECT COUNT(*)::int
-        FROM proposal_sentiment_votes v
-        WHERE v.proposal_id = p.id
-          AND v.vote_value = 'unsafe'
-    ),
-    merge_count = (
-        SELECT COUNT(*)::int
-        FROM proposal_merge_votes mv
-        WHERE mv.proposal_id = p.id
-          AND mv.target_proposal_id IS NOT NULL
-          AND EXISTS (
-              SELECT 1
-              FROM proposals target
-              WHERE target.id = mv.target_proposal_id
-                AND target.primary_state = 'active'
+    support_count = counts.support_count,
+    not_a_fit_count = counts.not_a_fit_count,
+    unclear_count = counts.unclear_count,
+    unsafe_count = counts.unsafe_count,
+    merge_count = counts.merge_count,
+    high_moderation_watch_started_at = CASE
+        WHEN counts.unsafe_count >= 8
+          OR (
+            (counts.support_count + counts.not_a_fit_count + counts.unclear_count + counts.unsafe_count + counts.merge_count) > 0
+            AND counts.unsafe_count::numeric
+                / (counts.support_count + counts.not_a_fit_count + counts.unclear_count + counts.unsafe_count + counts.merge_count)::numeric >= 0.35
           )
-          AND EXISTS (
-              SELECT 1
-              FROM proposal_merge_relationships r
-              WHERE r.source_proposal_id = mv.proposal_id
-                AND r.target_proposal_id = mv.target_proposal_id
-                AND r.status = 'active'
-          )
-    );
+        THEN COALESCE(p.high_moderation_watch_started_at, NOW())
+        ELSE NULL
+    END
+FROM counts
+WHERE counts.id = p.id;
 '@
 }
 
@@ -216,6 +237,331 @@ SELECT
     )
 FROM notification_recipients
 ON CONFLICT DO NOTHING;
+'@
+}
+
+function Get-CkSeedImplementationSql {
+@'
+WITH moderator AS (
+    SELECT id
+    FROM users
+    WHERE email = 'moderator@example.com'
+    LIMIT 1
+),
+candidate AS (
+    SELECT p.*
+    FROM proposals p
+    JOIN boards b ON b.id = p.board_id
+    WHERE b.code = 'solution'
+      AND p.parent_issue_proposal_id IS NOT NULL
+      AND p.primary_state IN ('active', 'ranked', 'archived')
+      AND p.action_description IS NOT NULL
+      AND p.title IN (
+          'Regional water testing lab network',
+          'DEMO SOLUTION: Regional water lab network',
+          'School drinking-water testing network'
+      )
+    ORDER BY
+        CASE p.title
+            WHEN 'Regional water testing lab network' THEN 1
+            WHEN 'DEMO SOLUTION: Regional water lab network' THEN 1
+            WHEN 'School drinking-water testing network' THEN 2
+            ELSE 10
+        END,
+        p.support_count DESC,
+        p.created_at DESC
+    LIMIT 1
+),
+payload AS (
+    SELECT
+        candidate.id AS solution_proposal_id,
+        candidate.parent_issue_proposal_id,
+        candidate.cycle_id,
+        candidate.locale_id,
+        (SELECT id FROM moderator) AS moderator_user_id,
+        candidate.title,
+        COALESCE(
+            NULLIF(BTRIM(candidate.action_description), ''),
+            'Coordinate verified water testing capacity for underserved regions.'
+        ) AS action_description,
+        COALESCE(
+            candidate.required_resource_categories,
+            '["money", "equipment", "labor", "organizational support"]'::jsonb
+        ) AS required_resource_categories,
+        jsonb_build_array(
+            jsonb_build_object(
+                'criterion_description', 'Publish the shared lab directory and intake workflow for pilot communities.',
+                'completion_status', 'completed',
+                'evidence_note', 'Directory and intake workflow drafted for pilot partners.',
+                'updated_at', '2026-05-30T00:00:00Z'
+            ),
+            jsonb_build_object(
+                'criterion_description', 'Run three pilot testing cycles with public result summaries.',
+                'completion_status', 'in_progress',
+                'evidence_note', 'First pilot cycle is being coordinated with regional partners.',
+                'updated_at', '2026-05-30T00:00:00Z'
+            ),
+            jsonb_build_object(
+                'criterion_description', 'Confirm escalation contacts for urgent contamination findings.',
+                'completion_status', 'not_started',
+                'evidence_note', 'Escalation list will be verified after partner onboarding.',
+                'updated_at', NULL
+            )
+        ) AS completion_criteria,
+        jsonb_build_array(
+            jsonb_build_object(
+                'resource_category', 'money',
+                'target_needed', '75000 USD',
+                'target_amount', '75000',
+                'target_unit', 'USD',
+                'current_acquired_amount', '28500',
+                'resource_status', 'in_progress',
+                'external_coordination_link', 'https://example.org/water-lab-implementation-fund',
+                'status_proof_note', 'Seeded local fixture: matching funds pledged by two regional partners.',
+                'resource_updated_at', '2026-05-30T00:00:00Z'
+            ),
+            jsonb_build_object(
+                'resource_category', 'equipment',
+                'target_needed', '120 test kits',
+                'target_amount', '120',
+                'target_unit', 'test kits',
+                'current_acquired_amount', '46',
+                'resource_status', 'in_progress',
+                'external_coordination_link', '',
+                'status_proof_note', 'Initial equipment commitments logged for pilot testing sites.',
+                'resource_updated_at', '2026-05-30T00:00:00Z'
+            ),
+            jsonb_build_object(
+                'resource_category', 'labor',
+                'target_needed', '8 lab partners',
+                'target_amount', '8',
+                'target_unit', 'lab partners',
+                'current_acquired_amount', '5',
+                'resource_status', 'in_progress',
+                'external_coordination_link', '',
+                'status_proof_note', 'Five partner labs identified; onboarding is still underway.',
+                'resource_updated_at', '2026-05-30T00:00:00Z'
+            )
+        ) AS execution_tracking_entries,
+        jsonb_build_object(
+            'support_count', candidate.support_count,
+            'not_a_fit_count', candidate.not_a_fit_count,
+            'unclear_count', candidate.unclear_count,
+            'unsafe_count', candidate.unsafe_count,
+            'merge_count', candidate.merge_count,
+            'seeded_implementation_fixture', TRUE
+        ) AS proposal_vote_snapshot
+    FROM candidate
+),
+upserted AS (
+    INSERT INTO execution_records (
+        solution_proposal_id,
+        parent_issue_proposal_id,
+        cycle_id,
+        locale_id,
+        created_by_moderator_user_id,
+        title,
+        action_description,
+        required_resource_categories,
+        completion_criteria,
+        execution_tracking_entries,
+        proposal_vote_snapshot,
+        status
+    )
+    SELECT
+        solution_proposal_id,
+        parent_issue_proposal_id,
+        cycle_id,
+        locale_id,
+        moderator_user_id,
+        title,
+        action_description,
+        required_resource_categories,
+        completion_criteria,
+        execution_tracking_entries,
+        proposal_vote_snapshot,
+        'active'
+    FROM payload
+    ON CONFLICT ON CONSTRAINT execution_records_one_solution_per_issue_cycle
+    DO UPDATE SET
+        solution_proposal_id = EXCLUDED.solution_proposal_id,
+        created_by_moderator_user_id = COALESCE(
+            EXCLUDED.created_by_moderator_user_id,
+            execution_records.created_by_moderator_user_id
+        ),
+        title = EXCLUDED.title,
+        action_description = EXCLUDED.action_description,
+        required_resource_categories = EXCLUDED.required_resource_categories,
+        completion_criteria = EXCLUDED.completion_criteria,
+        execution_tracking_entries = EXCLUDED.execution_tracking_entries,
+        proposal_vote_snapshot = EXCLUDED.proposal_vote_snapshot,
+        status = 'active',
+        updated_at = NOW()
+    RETURNING id, title
+)
+SELECT 'seeded_implementation=' || title || ' id=' || id
+FROM upserted
+UNION ALL
+SELECT 'seeded_implementation=none'
+WHERE NOT EXISTS (SELECT 1 FROM upserted);
+'@
+}
+
+function Get-CkSeedModerationHoldScenarioSql {
+@'
+WITH scenario_titles(title, support_count, not_fit_count, unclear_count, unsafe_count, hold_started_at) AS (
+    VALUES
+        ('Mobile water testing training corps', 10, 1, 0, 8, NOW() - INTERVAL '2 days'),
+        ('DEMO SOLUTION: Mobile water testing training corps', 10, 1, 0, 8, NOW() - INTERVAL '2 days'),
+        ('Regional water testing lab network', 22, 1, 0, 8, NOW()),
+        ('DEMO SOLUTION: Regional water lab network', 22, 1, 0, 8, NOW())
+),
+scenario_proposals AS (
+    SELECT
+        p.id AS proposal_id,
+        p.title,
+        s.support_count,
+        s.not_fit_count,
+        s.unclear_count,
+        s.unsafe_count,
+        s.hold_started_at
+    FROM proposals p
+    JOIN boards b ON b.id = p.board_id
+    JOIN scenario_titles s ON s.title = p.title
+    WHERE b.code = 'solution'
+)
+UPDATE proposals p
+SET
+    primary_state = 'active',
+    archived_reason = NULL,
+    moderation_note = NULL,
+    merged_into_proposal_id = NULL
+FROM scenario_proposals sp
+WHERE p.id = sp.proposal_id;
+
+WITH scenario_titles(title) AS (
+    VALUES
+        ('Mobile water testing training corps'),
+        ('DEMO SOLUTION: Mobile water testing training corps'),
+        ('Regional water testing lab network'),
+        ('DEMO SOLUTION: Regional water lab network')
+)
+UPDATE proposal_watch_flags wf
+SET
+    cleared_at = NOW(),
+    clearance_reason = 'dev_moderation_hold_scenario'
+FROM proposals p
+JOIN scenario_titles s ON s.title = p.title
+WHERE wf.proposal_id = p.id
+  AND wf.flag_code = 'frozen_for_review'
+  AND wf.cleared_at IS NULL;
+
+WITH scenario_titles(title) AS (
+    VALUES
+        ('Mobile water testing training corps'),
+        ('DEMO SOLUTION: Mobile water testing training corps'),
+        ('Regional water testing lab network'),
+        ('DEMO SOLUTION: Regional water lab network')
+)
+DELETE FROM proposal_sentiment_votes v
+USING proposals p, scenario_titles s
+WHERE v.proposal_id = p.id
+  AND p.title = s.title;
+
+WITH scenario_titles(title, support_count, not_fit_count, unclear_count, unsafe_count) AS (
+    VALUES
+        ('Mobile water testing training corps', 10, 1, 0, 8),
+        ('DEMO SOLUTION: Mobile water testing training corps', 10, 1, 0, 8),
+        ('Regional water testing lab network', 22, 1, 0, 8),
+        ('DEMO SOLUTION: Regional water lab network', 22, 1, 0, 8)
+),
+voters AS (
+    SELECT
+        id,
+        ROW_NUMBER() OVER (ORDER BY email) AS rn
+    FROM users
+    WHERE email LIKE 'seed-voter-%@example.test'
+),
+votes AS (
+    SELECT
+        p.id AS proposal_id,
+        voters.id AS user_id,
+        CASE
+            WHEN voters.rn <= scenario_titles.support_count THEN 'support'
+            WHEN voters.rn <= scenario_titles.support_count + scenario_titles.not_fit_count THEN 'not_a_fit'
+            WHEN voters.rn <= scenario_titles.support_count + scenario_titles.not_fit_count + scenario_titles.unclear_count THEN 'unclear'
+            ELSE 'unsafe'
+        END AS vote_value
+    FROM scenario_titles
+    JOIN proposals p ON p.title = scenario_titles.title
+    JOIN boards b ON b.id = p.board_id AND b.code = 'solution'
+    JOIN voters
+      ON voters.rn <= scenario_titles.support_count
+                    + scenario_titles.not_fit_count
+                    + scenario_titles.unclear_count
+                    + scenario_titles.unsafe_count
+)
+INSERT INTO proposal_sentiment_votes (proposal_id, user_id, vote_value)
+SELECT proposal_id, user_id, vote_value
+FROM votes
+ON CONFLICT (proposal_id, user_id)
+DO UPDATE SET vote_value = EXCLUDED.vote_value, updated_at = NOW();
+
+WITH scenario_titles(title, support_count, not_fit_count, unclear_count, unsafe_count) AS (
+    VALUES
+        ('Mobile water testing training corps', 10, 1, 0, 8),
+        ('DEMO SOLUTION: Mobile water testing training corps', 10, 1, 0, 8),
+        ('Regional water testing lab network', 22, 1, 0, 8),
+        ('DEMO SOLUTION: Regional water lab network', 22, 1, 0, 8)
+)
+UPDATE proposals p
+SET
+    support_count = scenario_titles.support_count,
+    not_a_fit_count = scenario_titles.not_fit_count,
+    unclear_count = scenario_titles.unclear_count,
+    unsafe_count = scenario_titles.unsafe_count
+FROM scenario_titles
+JOIN boards b ON b.code = 'solution'
+WHERE p.title = scenario_titles.title
+  AND p.board_id = b.id;
+
+WITH scenario_titles(title, hold_started_at) AS (
+    VALUES
+        ('Mobile water testing training corps', NOW() - INTERVAL '2 days'),
+        ('DEMO SOLUTION: Mobile water testing training corps', NOW() - INTERVAL '2 days'),
+        ('Regional water testing lab network', NOW()),
+        ('DEMO SOLUTION: Regional water lab network', NOW())
+)
+UPDATE proposals p
+SET high_moderation_watch_started_at = scenario_titles.hold_started_at
+FROM scenario_titles
+JOIN boards b ON b.code = 'solution'
+WHERE p.title = scenario_titles.title
+  AND p.board_id = b.id;
+
+SELECT
+    'moderation_hold_fixture' AS fixture,
+    p.title,
+    p.support_count,
+    p.not_a_fit_count,
+    p.unclear_count,
+    p.unsafe_count,
+    p.merge_count,
+    p.high_moderation_watch_started_at,
+    CASE
+        WHEN p.high_moderation_watch_started_at <= NOW() - INTERVAL '24 hours' THEN 'action_ready'
+        ELSE 'hold_active'
+    END AS expected_review_state
+FROM proposals p
+JOIN boards b ON b.id = p.board_id
+WHERE b.code = 'solution'
+  AND p.title IN (
+    'Mobile water testing training corps',
+    'DEMO SOLUTION: Mobile water testing training corps',
+    'Regional water testing lab network',
+    'DEMO SOLUTION: Regional water lab network'
+  )
+ORDER BY p.title;
 '@
 }
 
@@ -340,6 +686,8 @@ function Stage-CkRealisticEnvironment {
 
     $refresh = Get-CkRefreshCountsSql
     $notifications = Get-CkSeedMergeNotificationSql
+    $moderationHold = Get-CkSeedModerationHoldScenarioSql
+    $implementation = Get-CkSeedImplementationSql
     $sql = @"
 BEGIN;
 
@@ -602,6 +950,12 @@ DELETE FROM notification_events;
 
 $refresh
 
+$moderationHold
+
+$refresh
+
+$implementation
+
 $notifications
 
 COMMIT;
@@ -640,7 +994,8 @@ SELECT
     p.not_a_fit_count,
     p.unclear_count,
     p.unsafe_count,
-    p.merge_count
+    p.merge_count,
+    p.high_moderation_watch_started_at
 FROM proposals p
 JOIN boards b ON b.id = p.board_id
 WHERE b.code IN ('issue', 'solution')
@@ -696,8 +1051,49 @@ $$;
 
 SELECT *
 FROM _ck_trust_summary;
+
+SELECT
+    er.title,
+    pi.title AS issue_title,
+    er.status,
+    jsonb_array_length(er.execution_tracking_entries) AS resource_count,
+    jsonb_array_length(er.completion_criteria) AS criteria_count
+FROM execution_records er
+JOIN proposals pi ON pi.id = er.parent_issue_proposal_id
+ORDER BY er.created_at DESC;
 '@
     Invoke-CkSql $sql
+}
+
+function New-CkImplementationScenario {
+    $implementation = Get-CkSeedImplementationSql
+    $sql = @"
+BEGIN;
+
+$implementation
+
+COMMIT;
+"@
+    Invoke-CkSql $sql
+    Write-Host "Implementation scenario ready. Open Implementations to review seeded resource tracking."
+}
+
+function New-CkModerationHoldScenario {
+    $refresh = Get-CkRefreshCountsSql
+    $moderationHold = Get-CkSeedModerationHoldScenarioSql
+    $sql = @"
+BEGIN;
+
+$refresh
+
+$moderationHold
+
+$refresh
+
+COMMIT;
+"@
+    Invoke-CkSql $sql
+    Write-Host "Moderation hold scenario ready. Mobile water testing is action-ready; regional water lab is still in the 24-hour hold."
 }
 
 function Reset-CkUserParticipation {

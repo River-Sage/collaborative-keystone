@@ -88,10 +88,22 @@ const RESOURCE_CATEGORY_LABELS = {
   transport: "Logistics / Transport",
 };
 
+const RESOURCE_STATUS_OPTIONS = [
+  { value: "not_started", label: "Not Started" },
+  { value: "in_progress", label: "In Progress" },
+  { value: "secured", label: "Secured" },
+  { value: "blocked", label: "Blocked" },
+];
+
+const RESOURCE_STATUS_LABELS = Object.fromEntries(
+  RESOURCE_STATUS_OPTIONS.map((option) => [option.value, option.label])
+);
+
 function createEmptyCompletionCriterion(description = "") {
   return {
     criterion_description: description,
     completion_status: "not_started",
+    evidence_link: "",
     evidence_note: "",
     updated_at: null,
   };
@@ -104,8 +116,10 @@ function createEmptyExecutionEntry(overrides = {}) {
     target_amount: "",
     target_unit: "",
     current_acquired_amount: "",
+    resource_status: "not_started",
     external_coordination_link: "",
     status_proof_note: "",
+    resource_updated_at: null,
     ...overrides,
   };
 }
@@ -150,13 +164,6 @@ function getProposalTotalCount(proposal) {
   );
 }
 
-function isHighModerationWatch(proposal) {
-  if (!proposal) return false;
-  const totalCount = getProposalTotalCount(proposal);
-  const unsafeCount = proposal.unsafe_count || 0;
-  return unsafeCount >= 8 || (totalCount > 0 && unsafeCount / totalCount >= 0.35);
-}
-
 function isMergeWatch(proposal) {
   if (!proposal) return false;
   const totalCount = getProposalTotalCount(proposal);
@@ -176,6 +183,15 @@ function isUuid(value) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
     value.trim()
   );
+}
+
+function formatPublicUserId(value) {
+  if (!value) return "";
+  const raw = String(value).trim();
+  if (raw.startsWith("user-")) return raw;
+  const compact = raw.replace(/-/g, "");
+  if (!compact) return "";
+  return `user-${compact.slice(0, 10)}`;
 }
 
 function App() {
@@ -224,9 +240,6 @@ function App() {
   const [mergeError, setMergeError] = useState("");
   const [mergeSuccess, setMergeSuccess] = useState("");
   const [mergeVoteTargetId, setMergeVoteTargetId] = useState("");
-  const [executionLoading, setExecutionLoading] = useState(false);
-  const [executionError, setExecutionError] = useState("");
-  const [executionSuccess, setExecutionSuccess] = useState("");
   const [executionEditStatus, setExecutionEditStatus] = useState("active");
   const [executionCriteriaDraft, setExecutionCriteriaDraft] = useState([]);
   const [executionEntriesDraft, setExecutionEntriesDraft] = useState([]);
@@ -320,6 +333,12 @@ function App() {
     return TABS.filter((tab) => !tab.moderatorOnly || isModerator);
   }, [isModerator]);
 
+  const activeTabConfig = useMemo(() => {
+    return TABS.find((tab) => tab.key === activeTab);
+  }, [activeTab]);
+
+  const activeTabIsModerator = Boolean(activeTabConfig?.moderatorOnly);
+
   async function initializeSession() {
     try {
       const data = await api.me();
@@ -345,8 +364,6 @@ function App() {
     setModerationSuccess("");
     setMergeError("");
     setMergeSuccess("");
-    setExecutionError("");
-    setExecutionSuccess("");
     setExecutionUpdateError("");
     setExecutionUpdateSuccess("");
     setExecutionUpdateNote("");
@@ -711,8 +728,6 @@ function App() {
       setModerationSuccess("");
       setMergeError("");
       setMergeSuccess("");
-      setExecutionError("");
-      setExecutionSuccess("");
       setExecutionUpdateError("");
       setExecutionUpdateSuccess("");
       setDistinctionError("");
@@ -931,29 +946,6 @@ function App() {
     }
   }
 
-  async function handleCreateExecutionRecord() {
-    if (!selectedProposal?.proposal?.id) return;
-
-    try {
-      setExecutionLoading(true);
-      setExecutionError("");
-      setExecutionSuccess("");
-
-      const data = await api.createExecutionRecord(selectedProposal.proposal.id);
-      setSelectedExecution(data.execution_record);
-      seedExecutionUpdateForm(data.execution_record);
-      setSelectedProposal(null);
-      setExecutionSuccess("Implementation record created.");
-
-      await loadTabData(activeTab);
-    } catch (error) {
-      if (await handleProtectedError(error)) return;
-      setExecutionError(error.message || "Failed to create implementation record.");
-    } finally {
-      setExecutionLoading(false);
-    }
-  }
-
   async function handleResolveCurrentCycle() {
     try {
       setOutcomeResolveLoading(true);
@@ -981,13 +973,8 @@ function App() {
     setExecutionCriteriaDraft(
       asArray(record?.completion_criteria).map((criterion) =>
         typeof criterion === "string"
-          ? {
-              criterion_description: criterion,
-              completion_status: "not_started",
-              evidence_note: "",
-              updated_at: null,
-            }
-          : { ...criterion }
+          ? createEmptyCompletionCriterion(criterion)
+          : normalizeCompletionCriterion(criterion)
       )
     );
     setExecutionEntriesDraft(
@@ -997,8 +984,10 @@ function App() {
               resource_category: "other",
               target_needed: entry,
               current_acquired_amount: "",
+              resource_status: "not_started",
               external_coordination_link: "",
               status_proof_note: "",
+              resource_updated_at: null,
             }
           : { ...entry }
       )
@@ -1027,6 +1016,7 @@ function App() {
           ? {
               ...entry,
               [field]: value,
+              resource_updated_at: new Date().toISOString(),
             }
           : entry
       )
@@ -1637,8 +1627,6 @@ function App() {
     setModerationSuccess("");
     setMergeError("");
     setMergeSuccess("");
-    setExecutionError("");
-    setExecutionSuccess("");
     setMergeVoteTargetId("");
     resetDistinctionForm();
     setDistinctionError("");
@@ -1720,7 +1708,9 @@ function App() {
 
   function getItemTitle(item) {
     if (item?.flag_code) {
-      return `${formatActionType(item.flag_code)}: ${item.user_email || "unknown user"}`;
+      return `${formatActionType(item.flag_code)}: ${
+        item.user_public_id || "unknown user"
+      }`;
     }
     if (item?.result_status) {
       const boardLabel = formatActionType(item.board_code);
@@ -1811,6 +1801,52 @@ function App() {
     return counts.support + counts.notFit + counts.unclear + counts.unsafe + counts.merge;
   }
 
+  function getThresholdCountSummary(item) {
+    const source = item?.winning_proposal || item?.proposal || item;
+    const reviewReason = item?.review_reason || source?.review_reason || "";
+    const counts = getItemCounts(item);
+    const total = getTotalVoteCount(item);
+    const negative = counts.notFit + counts.unclear + counts.unsafe;
+    const nonMerge = counts.support + negative;
+
+    if (
+      reviewReason === "high_moderation_hold" ||
+      reviewReason === "high_moderation_review"
+    ) {
+      return {
+        label: "Moderation threshold",
+        metrics: [
+          `Unsafe: ${counts.unsafe}`,
+          `Total: ${total}`,
+        ],
+      };
+    }
+
+    if (reviewReason === "moderation_watch_review") {
+      const negativeDominance =
+        nonMerge >= 10 && negative > 8 * Math.max(counts.support, 1);
+
+      return {
+        label: "Moderation watch",
+        metrics: negativeDominance
+          ? [`Negative: ${negative}`, `Non-merge total: ${nonMerge}`]
+          : [`Unsafe: ${counts.unsafe}`, `Total: ${total}`],
+      };
+    }
+
+    if (reviewReason === "merge_review") {
+      return {
+        label: "Merge threshold",
+        metrics: [
+          `Merge: ${counts.merge}`,
+          `Total: ${total}`,
+        ],
+      };
+    }
+
+    return null;
+  }
+
   function findCurrentListProposal(proposalId) {
     return items
       .map((item) => item?.proposal || item)
@@ -1870,7 +1906,7 @@ function App() {
     if (item?.reconsideration_id) return item.review_due ? "Review Due" : "Window Open";
     if (item?.appeal_id) return "Appeal";
     if (item?.review_bucket) return item.review_bucket;
-    if (item?.review_reason) return item.review_reason;
+    if (item?.review_reason) return formatActionType(item.review_reason);
     if (item?.archived_reason) return item.archived_reason;
     return null;
   }
@@ -1910,8 +1946,109 @@ function App() {
     return item.evidence_note || item.proof_note || null;
   }
 
+  function getCriterionEvidenceLink(item) {
+    if (!item || typeof item === "string") return "";
+    return item.evidence_link || item.external_evidence_link || item.evidence_url || "";
+  }
+
   function getExecutionNote(item) {
     return item?.status_proof_note || item?.status_note || item?.proof_note || "";
+  }
+
+  function getResourceStatus(item) {
+    if (!item || typeof item === "string") return "not_started";
+    return item.resource_status || item.status || "not_started";
+  }
+
+  function isSolutionResourceEntryComplete(entry) {
+    return Boolean(
+      String(entry?.resource_category || "").trim() &&
+        String(entry?.target_amount || "").trim() &&
+        String(entry?.target_unit || "").trim()
+    );
+  }
+
+  function isSolutionCriterionComplete(criterion) {
+    return Boolean(String(criterion?.criterion_description || "").trim());
+  }
+
+  function isResourceCategoryComplete(entries, category) {
+    const matchingEntries = asArray(entries).filter(
+      (entry) => String(entry?.resource_category || "").trim() === category
+    );
+
+    return (
+      matchingEntries.length > 0 &&
+      matchingEntries.every(isSolutionResourceEntryComplete)
+    );
+  }
+
+  function formatResourceStatus(value) {
+    return RESOURCE_STATUS_LABELS[value] || formatActionType(value || "not_started");
+  }
+
+  function parseTrackableNumber(value) {
+    const normalized = String(value || "")
+      .replace(/,/g, "")
+      .match(/-?\d+(\.\d+)?/);
+
+    if (!normalized) return null;
+
+    const parsed = Number(normalized[0]);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  function formatTrackableNumber(value) {
+    if (!Number.isFinite(value)) return "";
+    return Number.isInteger(value)
+      ? value.toLocaleString()
+      : value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  }
+
+  function getResourceProgress(entry) {
+    const target = parseTrackableNumber(entry?.target_amount);
+    const acquired = parseTrackableNumber(entry?.current_acquired_amount);
+
+    if (!target || target <= 0 || acquired == null || acquired < 0) {
+      return null;
+    }
+
+    const cappedAcquired = Math.min(acquired, target);
+    const percent = Math.round((cappedAcquired / target) * 100);
+    const remaining = Math.max(target - acquired, 0);
+    const unit = String(entry?.target_unit || "").trim();
+
+    return {
+      acquired,
+      percent,
+      remaining,
+      target,
+      unit,
+    };
+  }
+
+  function formatResourceAmount(value, unit) {
+    return [formatTrackableNumber(value), unit].filter(Boolean).join(" ");
+  }
+
+  function summarizeResourceEntries(entries) {
+    const summary = {
+      total: entries.length,
+      secured: 0,
+      blocked: 0,
+      inProgress: 0,
+      notStarted: 0,
+    };
+
+    entries.forEach((entry) => {
+      const status = getResourceStatus(entry);
+      if (status === "secured") summary.secured += 1;
+      else if (status === "blocked") summary.blocked += 1;
+      else if (status === "in_progress") summary.inProgress += 1;
+      else summary.notStarted += 1;
+    });
+
+    return summary;
   }
 
   function buildTargetNeeded(entry) {
@@ -1948,6 +2085,7 @@ function App() {
       criterion_description:
         item?.criterion_description || item?.description || "",
       completion_status: item?.completion_status || item?.status || "not_started",
+      evidence_link: getCriterionEvidenceLink(item),
       evidence_note: item?.evidence_note || item?.proof_note || "",
       updated_at: item?.updated_at || null,
     };
@@ -1964,8 +2102,10 @@ function App() {
       target_amount: item?.target_amount || item?.amount_required || item?.target_needed || "",
       target_unit: item?.target_unit || item?.unit || "",
       current_acquired_amount: item?.current_acquired_amount || "",
+      resource_status: getResourceStatus(item),
       external_coordination_link: item?.external_coordination_link || "",
       status_proof_note: getExecutionNote(item),
+      resource_updated_at: item?.resource_updated_at || item?.updated_at || null,
     });
   }
 
@@ -2005,6 +2145,7 @@ function App() {
         .map((criterion) => ({
           ...criterion,
           criterion_description: criterion.criterion_description.trim(),
+          evidence_link: criterion.evidence_link.trim(),
           evidence_note: criterion.evidence_note.trim(),
         }))
         .filter((criterion) => criterion.criterion_description)
@@ -2075,9 +2216,6 @@ function App() {
   const selectedArchiveRestoreBlocked =
     selectedProposal?.proposal?.archived_reason === "merged" ||
     selectedProposal?.proposal?.archived_reason === "cycle_closed";
-  const selectedHighModerationWatch = isHighModerationWatch(
-    selectedProposal?.proposal
-  );
   const selectedStateLabel =
     selectedProposal?.proposal?.primary_state || (selectedIsArchived ? "archived" : "active");
   const selectedIsAuthor =
@@ -2222,6 +2360,12 @@ function App() {
   const solutionResourceEntries = asArray(solutionForm.executionTrackingEntries);
   const solutionResourcesAtLimit =
     solutionResourceEntries.length >= MAX_RESOURCE_REQUIREMENTS;
+  const selectedExecutionResourceEntries = asArray(
+    selectedExecution?.execution_tracking_entries
+  ).map(normalizeExecutionEntry);
+  const selectedExecutionResourceSummary = summarizeResourceEntries(
+    selectedExecutionResourceEntries
+  );
   const canVoteOnSelected =
     canParticipate &&
     selectedProposal?.proposal &&
@@ -2440,7 +2584,7 @@ function App() {
     isModerator &&
     activeTab === "reviewQueue" &&
     selectedProposal?.proposal?.primary_state === "active" &&
-    (selectedHighModerationWatch ||
+    (selectedProposal?.proposal?.review_reason === "high_moderation_review" ||
       selectedProposal?.proposal?.review_reason === "frozen_review");
   const showModerationObservationOnly =
     isModerator &&
@@ -2528,12 +2672,10 @@ function App() {
     activeTab === "reviewQueue" &&
     selectedProposal?.proposal?.primary_state === "active" &&
     mergeOptions.length > 0;
-
-  const showExecutionRecordControls =
-    isModerator &&
-    selectedBoardCode === "solution" &&
-    !selectedIsArchived &&
-    selectedProposal?.proposal?.id;
+  const selectedThresholdSummary =
+    isModerator && selectedProposal?.proposal
+      ? getThresholdCountSummary(selectedProposal.proposal)
+      : null;
 
   if (!sessionChecked) {
     return (
@@ -2748,7 +2890,13 @@ function App() {
       ) : null}
 
       <main className="board-layout">
-        <section className="panel board-panel">
+        <section
+          className={`panel board-panel${
+            activeTabIsModerator && !showingAccountView && !showingSubmissionView
+              ? " moderator-surface"
+              : ""
+          }`}
+        >
           <div className="panel-header">
             {needsRequiredReview ? (
               <p className="muted review-unlock-message">{reviewUnlockMessage}</p>
@@ -2939,7 +3087,13 @@ function App() {
                       required
                     />
                   </label>
-                  <fieldset className="structured-fieldset">
+                  <fieldset
+                    className={`structured-fieldset ${
+                      solutionResourceEntries.every(isSolutionResourceEntryComplete)
+                        ? "section-complete"
+                        : "section-attention"
+                    }`}
+                  >
                     <div className="structured-fieldset-heading">
                       <span>
                         Required Resources ({solutionResourceEntries.length}/
@@ -2954,12 +3108,36 @@ function App() {
                       </button>
                     </div>
                     <div className="structured-list">
-                      {solutionResourceEntries.map(
-                        (entry, index) => (
-                          <div className="structured-item" key={`solution-entry-${index}`}>
+                      {solutionResourceEntries.map((entry, index) => {
+                        const itemComplete = isSolutionResourceEntryComplete(entry);
+
+                        return (
+                          <div
+                            className={`structured-item ${
+                              itemComplete
+                                ? "section-item-complete"
+                                : "section-item-attention"
+                            }`}
+                            key={`solution-entry-${index}`}
+                          >
                             <div className="structured-item-header">
-                              <span className="structured-index">{index + 1}</span>
+                              <span
+                                className={`structured-index ${
+                                  itemComplete ? "structured-index-complete" : ""
+                                }`}
+                              >
+                                {index + 1}
+                              </span>
                               <strong>Required Resource</strong>
+                              <span
+                                className={`state-pill section-status-pill ${
+                                  itemComplete
+                                    ? "section-status-complete"
+                                    : "section-status-attention"
+                                }`}
+                              >
+                                {itemComplete ? "Ready" : "Needs info"}
+                              </span>
                             </div>
                             <div className="structured-row">
                               <label>
@@ -3027,24 +3205,40 @@ function App() {
                               Remove
                             </button>
                           </div>
-                        )
-                      )}
+                        );
+                      })}
                     </div>
                     <div className="resource-summary-box">
                       <strong>Required Types</strong>
                       <div className="proposal-badge-stack">
-                        {getRequiredResourceCategories(
-                          solutionResourceEntries
-                        ).map((category) => (
-                          <span className="state-pill subtle-pill" key={category}>
-                            {formatResourceCategory(category)}
-                          </span>
-                        ))}
+                        {getRequiredResourceCategories(solutionResourceEntries).map(
+                          (category) => (
+                            <span
+                              className={`state-pill section-status-pill ${
+                                isResourceCategoryComplete(
+                                  solutionResourceEntries,
+                                  category
+                                )
+                                  ? "section-status-complete"
+                                  : "section-status-attention"
+                              }`}
+                              key={category}
+                            >
+                              {formatResourceCategory(category)}
+                            </span>
+                          )
+                        )}
                       </div>
                     </div>
                   </fieldset>
 
-                  <fieldset className="structured-fieldset compact-criteria-fieldset">
+                  <fieldset
+                    className={`structured-fieldset compact-criteria-fieldset ${
+                      solutionCompletionCriteria.every(isSolutionCriterionComplete)
+                        ? "section-complete"
+                        : "section-attention"
+                    }`}
+                  >
                     <div className="structured-fieldset-heading">
                       <span>
                         Completion Criteria ({solutionCompletionCriteria.length}/
@@ -3059,36 +3253,50 @@ function App() {
                       </button>
                     </div>
                     <div className="compact-criteria-list">
-                      {solutionCompletionCriteria.map((criterion, index) => (
-                        <div
-                          className="compact-criteria-item"
-                          key={`solution-criterion-${index}`}
-                        >
-                          <span className="structured-index">{index + 1}</span>
-                          <input
-                            aria-label={`Completion criterion ${index + 1}`}
-                            value={criterion.criterion_description || ""}
-                            onChange={(event) =>
-                              updateSolutionCriterion(
-                                index,
-                                "criterion_description",
-                                event.target.value
-                              )
-                            }
-                            maxLength={MAX_COMPLETION_CRITERION_CHARS}
-                            placeholder="Done when..."
-                            required
-                          />
-                          <button
-                            type="button"
-                            className="quiet-button"
-                            onClick={() => removeSolutionCriterion(index)}
-                            disabled={solutionCompletionCriteria.length <= 1}
+                      {solutionCompletionCriteria.map((criterion, index) => {
+                        const itemComplete = isSolutionCriterionComplete(criterion);
+
+                        return (
+                          <div
+                            className={`compact-criteria-item ${
+                              itemComplete
+                                ? "section-item-complete"
+                                : "section-item-attention"
+                            }`}
+                            key={`solution-criterion-${index}`}
                           >
-                            Remove
-                          </button>
-                        </div>
-                      ))}
+                            <span
+                              className={`structured-index ${
+                                itemComplete ? "structured-index-complete" : ""
+                              }`}
+                            >
+                              {index + 1}
+                            </span>
+                            <input
+                              aria-label={`Completion criterion ${index + 1}`}
+                              value={criterion.criterion_description || ""}
+                              onChange={(event) =>
+                                updateSolutionCriterion(
+                                  index,
+                                  "criterion_description",
+                                  event.target.value
+                                )
+                              }
+                              maxLength={MAX_COMPLETION_CRITERION_CHARS}
+                              placeholder="Done when..."
+                              required
+                            />
+                            <button
+                              type="button"
+                              className="quiet-button"
+                              onClick={() => removeSolutionCriterion(index)}
+                              disabled={solutionCompletionCriteria.length <= 1}
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        );
+                      })}
                     </div>
                   </fieldset>
 
@@ -3196,15 +3404,15 @@ function App() {
               const state = getItemState(item);
               const publicStateLabel = getPublicStateLabel(item);
               const description = getItemDescription(item);
-              const counts = getItemCounts(item);
               const extraBadge = getExtraBadge(item);
+              const thresholdSummary = getThresholdCountSummary(item);
               const isCycleResult = Boolean(item?.result_status);
-              const showCounts =
-                (isModerator || isCycleResult) &&
+              const showThresholdSummary =
+                isModerator &&
+                thresholdSummary &&
                 !item?.appeal_id &&
                 !item?.reconsideration_id &&
-                !item?.solution_proposal_id &&
-                (!isCycleResult || item?.winning_proposal);
+                !item?.solution_proposal_id;
 
               if (activeTab === "reviewPool") {
                 const reviewVote = localSentimentVotes[id] || "";
@@ -3243,7 +3451,7 @@ function App() {
 
               if (activeTab === "trustReview") {
                 const detailRows = [
-                  item.user_email ? `User: ${item.user_email}` : null,
+                  item.user_public_id ? `User ID: ${item.user_public_id}` : null,
                   item.proposal_title ? `Submission: ${item.proposal_title}` : null,
                   item.related_proposal_title
                     ? `Related: ${item.related_proposal_title}`
@@ -3332,21 +3540,12 @@ function App() {
 
                   {description ? <p className="proposal-snippet">{description}</p> : null}
 
-                  {showCounts ? (
-                    <div className="proposal-counts">
-                      <span>Support: {counts.support}</span>
-                      <span>Not fit: {counts.notFit}</span>
-                      <span>Unclear: {counts.unclear}</span>
-                      <span>Unsafe: {counts.unsafe}</span>
-                      <span>Merge: {counts.merge}</span>
-                      {item?.classification ? (
-                        <span>
-                          Ratio:{" "}
-                          {item.support_ratio == null
-                            ? "n/a"
-                            : item.support_ratio.toFixed(3)}
-                        </span>
-                      ) : null}
+                  {showThresholdSummary ? (
+                    <div className="proposal-counts moderator-threshold-counts">
+                      <strong>{thresholdSummary.label}</strong>
+                      {thresholdSummary.metrics.map((metric) => (
+                        <span key={metric}>{metric}</span>
+                      ))}
                     </div>
                   ) : null}
                 </button>
@@ -3526,49 +3725,114 @@ function App() {
                     <h4>Completion Criteria</h4>
                     <div className="relationship-block">
                       {asArray(selectedExecution.completion_criteria).map(
-                        (criterion, index) => (
-                          <div
-                            className="relationship-card"
-                            key={`execution-criterion-${index}`}
-                          >
-                            <strong>{getCriterionDescription(criterion)}</strong>
-                            {getCriterionStatus(criterion) ? (
-                              <p className="muted">
-                                {formatActionType(getCriterionStatus(criterion))}
-                              </p>
-                            ) : null}
-                            {getCriterionEvidence(criterion) ? (
-                              <p>{getCriterionEvidence(criterion)}</p>
-                            ) : null}
-                          </div>
-                        )
+                        (criterion, index) => {
+                          const status = getCriterionStatus(criterion) || "not_started";
+
+                          return (
+                            <div
+                              className={`relationship-card status-coded-card status-card-${status}`}
+                              key={`execution-criterion-${index}`}
+                            >
+                              <div className="resource-card-header">
+                                <strong>{getCriterionDescription(criterion)}</strong>
+                                <span
+                                  className={`state-pill completion-status-pill completion-status-${status}`}
+                                >
+                                  {formatActionType(status)}
+                                </span>
+                              </div>
+                              {getCriterionEvidenceLink(criterion) ? (
+                                <p>
+                                  <a
+                                    href={getCriterionEvidenceLink(criterion)}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                  >
+                                    Evidence Link
+                                  </a>
+                                </p>
+                              ) : null}
+                              {getCriterionEvidence(criterion) ? (
+                                <p>{getCriterionEvidence(criterion)}</p>
+                              ) : null}
+                            </div>
+                          );
+                        }
                       )}
                     </div>
                   </>
                 ) : null}
 
-                {asArray(selectedExecution.execution_tracking_entries).length ? (
+                {selectedExecutionResourceEntries.length ? (
                   <>
                     <h4>Resource Tracking</h4>
+                    <div className="resource-tracking-summary">
+                      <span className="state-pill subtle-pill">
+                        {selectedExecutionResourceSummary.total} resources
+                      </span>
+                      {selectedExecutionResourceSummary.notStarted ? (
+                        <span className="state-pill resource-status-pill resource-status-not_started">
+                          {selectedExecutionResourceSummary.notStarted} not started
+                        </span>
+                      ) : null}
+                      <span className="state-pill resource-status-pill resource-status-in_progress">
+                        {selectedExecutionResourceSummary.inProgress} in progress
+                      </span>
+                      {selectedExecutionResourceSummary.blocked ? (
+                        <span className="state-pill resource-status-pill resource-status-blocked">
+                          {selectedExecutionResourceSummary.blocked} blocked
+                        </span>
+                      ) : null}
+                      <span className="state-pill resource-status-pill resource-status-secured">
+                        {selectedExecutionResourceSummary.secured} secured
+                      </span>
+                    </div>
                     <div className="relationship-block">
-                      {asArray(selectedExecution.execution_tracking_entries).map(
-                        (entry, index) => (
+                      {selectedExecutionResourceEntries.map((entry, index) => {
+                        const progress = getResourceProgress(entry);
+                        const status = getResourceStatus(entry);
+
+                        return (
                           <div
-                            className="relationship-card"
+                            className={`relationship-card resource-tracking-card status-coded-card status-card-${status}`}
                             key={`execution-entry-${index}`}
                           >
-                            <strong>
-                              {formatResourceCategory(entry?.resource_category || "other")}
-                            </strong>
+                            <div className="resource-card-header">
+                              <strong>
+                                {formatResourceCategory(entry?.resource_category || "other")}
+                              </strong>
+                              <span
+                                className={`state-pill resource-status-pill resource-status-${status}`}
+                              >
+                                {formatResourceStatus(status)}
+                              </span>
+                            </div>
                             <p>
-                              <strong>Needed:</strong>{" "}
-                              {entry?.target_needed || "Not specified"}
+                              <strong>Target:</strong>{" "}
+                              {buildTargetNeeded(entry) || "Not specified"}
                             </p>
-                            {entry?.current_acquired_amount ? (
-                              <p>
-                                <strong>Acquired:</strong>{" "}
-                                {entry.current_acquired_amount}
-                              </p>
+                            <p>
+                              <strong>Acquired:</strong>{" "}
+                              {entry?.current_acquired_amount || "Not reported"}
+                            </p>
+                            {progress ? (
+                              <div
+                                className="resource-progress"
+                                style={{ "--resource-progress": `${progress.percent}%` }}
+                              >
+                                <div className="resource-progress-track">
+                                  <span className="resource-progress-fill" />
+                                </div>
+                                <p className="muted small-muted">
+                                  {progress.percent}% acquired
+                                  {progress.remaining > 0
+                                    ? `; ${formatResourceAmount(
+                                        progress.remaining,
+                                        progress.unit
+                                      )} remaining`
+                                    : "; target met or exceeded"}
+                                </p>
+                              </div>
                             ) : null}
                             {entry?.external_coordination_link ? (
                               <p>
@@ -3577,23 +3841,31 @@ function App() {
                                   target="_blank"
                                   rel="noreferrer"
                                 >
-                                  Coordination Link
+                                  Tracking Link
                                 </a>
                               </p>
                             ) : null}
                             {getExecutionNote(entry) ? (
                               <p>{getExecutionNote(entry)}</p>
                             ) : null}
+                            {entry?.resource_updated_at ? (
+                              <p className="muted small-muted">
+                                Resource updated: {entry.resource_updated_at}
+                              </p>
+                            ) : null}
                           </div>
-                        )
-                      )}
+                        );
+                      })}
                     </div>
                   </>
                 ) : null}
 
                 {isModerator ? (
-                  <form className="moderation-box" onSubmit={handleSaveExecutionUpdate}>
-                    <h4>Update Implementation</h4>
+                  <form
+                    className="moderation-box moderator-box"
+                    onSubmit={handleSaveExecutionUpdate}
+                  >
+                    <h4>Moderator Steward Update</h4>
 
                     <label className="moderation-field">
                       Status
@@ -3603,9 +3875,10 @@ function App() {
                       >
                         <option value="active">Active</option>
                         <option value="paused">Paused</option>
-                        <option value="completed">Completed</option>
-                        <option value="cancelled">Cancelled</option>
                       </select>
+                      <span className="field-hint">
+                        Completion and cancellation will use a separate claim/review flow.
+                      </span>
                     </label>
 
                     {executionCriteriaDraft.length ? (
@@ -3637,7 +3910,21 @@ function App() {
                                 </select>
                               </label>
                               <label className="moderation-field">
-                                Evidence
+                                Evidence Link
+                                <input
+                                  value={getCriterionEvidenceLink(criterion)}
+                                  onChange={(event) =>
+                                    updateExecutionCriterion(
+                                      index,
+                                      "evidence_link",
+                                      event.target.value
+                                    )
+                                  }
+                                  maxLength={MAX_LINK_CHARS}
+                                />
+                              </label>
+                              <label className="moderation-field">
+                                Evidence Note
                                 <textarea
                                   value={getCriterionEvidence(criterion) || ""}
                                   onChange={(event) =>
@@ -3659,7 +3946,7 @@ function App() {
 
                     {executionEntriesDraft.length ? (
                       <>
-                        <h4>Resource Updates</h4>
+                        <h4>Resource Tracking</h4>
                         <div className="relationship-block">
                           {executionEntriesDraft.map((entry, index) => (
                             <div
@@ -3673,6 +3960,25 @@ function App() {
                                 <strong>Needed:</strong>{" "}
                                 {entry?.target_needed || "Not specified"}
                               </p>
+                              <label className="moderation-field">
+                                Resource Status
+                                <select
+                                  value={getResourceStatus(entry)}
+                                  onChange={(event) =>
+                                    updateExecutionEntry(
+                                      index,
+                                      "resource_status",
+                                      event.target.value
+                                    )
+                                  }
+                                >
+                                  {RESOURCE_STATUS_OPTIONS.map((option) => (
+                                    <option key={option.value} value={option.value}>
+                                      {option.label}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
                               <label className="moderation-field">
                                 Acquired
                                 <input
@@ -3688,7 +3994,7 @@ function App() {
                                 />
                               </label>
                               <label className="moderation-field">
-                                Coordination Link
+                                Tracking Link
                                 <input
                                   value={entry?.external_coordination_link || ""}
                                   onChange={(event) =>
@@ -3702,7 +4008,7 @@ function App() {
                                 />
                               </label>
                               <label className="moderation-field">
-                                Proof Note
+                                Verification Note
                                 <textarea
                                   value={getExecutionNote(entry)}
                                   onChange={(event) =>
@@ -3723,7 +4029,7 @@ function App() {
                     ) : null}
 
                     <label className="moderation-field">
-                      Update Note
+                      Steward Note
                       <textarea
                         value={executionUpdateNote}
                         onChange={(event) => setExecutionUpdateNote(event.target.value)}
@@ -3740,7 +4046,7 @@ function App() {
                     ) : null}
 
                     <button type="submit" disabled={executionUpdateLoading}>
-                      {executionUpdateLoading ? "Saving..." : "Save Implementation Update"}
+                      {executionUpdateLoading ? "Saving..." : "Save Steward Update"}
                     </button>
                   </form>
                 ) : null}
@@ -3771,7 +4077,8 @@ function App() {
                     <strong>Board:</strong> {selectedProposal.proposal.board_code}
                   </div>
                   <div>
-                    <strong>Author:</strong> {selectedProposal.proposal.author_user_id}
+                    <strong>Author ID:</strong>{" "}
+                    {formatPublicUserId(selectedProposal.proposal.author_user_id)}
                   </div>
                   <div>
                     <strong>Created:</strong> {selectedProposal.proposal.created_at}
@@ -3848,7 +4155,7 @@ function App() {
                 ) : null}
 
                 {showAppealReviewControls ? (
-                  <div className="moderation-box">
+                  <div className="moderation-box moderator-box">
                     <h4>Appeal Review</h4>
 
                     <div className="detail-grid">
@@ -3975,7 +4282,7 @@ function App() {
                 ) : null}
 
                 {showReconsiderationReviewControls ? (
-                  <div className="moderation-box">
+                  <div className="moderation-box moderator-box">
                     <h4>Reconsideration Review</h4>
 
                     <div className="detail-grid">
@@ -4119,19 +4426,39 @@ function App() {
                     <h4>Completion Criteria</h4>
                     <div className="relationship-block">
                       {asArray(selectedProposal.proposal.completion_criteria).map(
-                        (criterion, index) => (
-                          <div className="relationship-card" key={`criterion-${index}`}>
-                            <strong>{getCriterionDescription(criterion)}</strong>
-                            {getCriterionStatus(criterion) ? (
-                              <p className="muted">
-                                {formatActionType(getCriterionStatus(criterion))}
-                              </p>
-                            ) : null}
-                            {getCriterionEvidence(criterion) ? (
-                              <p>{getCriterionEvidence(criterion)}</p>
-                            ) : null}
-                          </div>
-                        )
+                        (criterion, index) => {
+                          const status = getCriterionStatus(criterion) || "not_started";
+
+                          return (
+                            <div
+                              className={`relationship-card status-coded-card status-card-${status}`}
+                              key={`criterion-${index}`}
+                            >
+                              <div className="resource-card-header">
+                                <strong>{getCriterionDescription(criterion)}</strong>
+                                <span
+                                  className={`state-pill completion-status-pill completion-status-${status}`}
+                                >
+                                  {formatActionType(status)}
+                                </span>
+                              </div>
+                              {getCriterionEvidenceLink(criterion) ? (
+                                <p>
+                                  <a
+                                    href={getCriterionEvidenceLink(criterion)}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                  >
+                                    Evidence Link
+                                  </a>
+                                </p>
+                              ) : null}
+                              {getCriterionEvidence(criterion) ? (
+                                <p>{getCriterionEvidence(criterion)}</p>
+                              ) : null}
+                            </div>
+                          );
+                        }
                       )}
                     </div>
                   </>
@@ -4143,75 +4470,73 @@ function App() {
                     <div className="relationship-block">
                       {asArray(
                         selectedProposal.proposal.execution_tracking_entries
-                      ).map((entry, index) => (
-                        <div className="relationship-card" key={`execution-${index}`}>
-                          <strong>
-                            {formatResourceCategory(entry?.resource_category || "other")}
-                          </strong>
-                          <p>
-                            <strong>Needed:</strong> {entry?.target_needed || "Not specified"}
-                          </p>
-                          {entry?.current_acquired_amount ? (
-                            <p>
-                              <strong>Acquired:</strong> {entry.current_acquired_amount}
-                            </p>
-                          ) : null}
-                          {entry?.external_coordination_link ? (
-                            <p>
-                              <a
-                                href={entry.external_coordination_link}
-                                target="_blank"
-                                rel="noreferrer"
+                      ).map((entry, index) => {
+                        const status = getResourceStatus(entry);
+
+                        return (
+                          <div
+                            className={`relationship-card status-coded-card status-card-${status}`}
+                            key={`execution-${index}`}
+                          >
+                            <div className="resource-card-header">
+                              <strong>
+                                {formatResourceCategory(entry?.resource_category || "other")}
+                              </strong>
+                              <span
+                                className={`state-pill resource-status-pill resource-status-${status}`}
                               >
-                                Coordination Link
-                              </a>
+                                {formatResourceStatus(status)}
+                              </span>
+                            </div>
+                            <p>
+                              <strong>Needed:</strong>{" "}
+                              {entry?.target_needed || "Not specified"}
                             </p>
-                          ) : null}
-                          {getExecutionNote(entry) ? <p>{getExecutionNote(entry)}</p> : null}
-                        </div>
-                      ))}
+                            {entry?.current_acquired_amount ? (
+                              <p>
+                                <strong>Acquired:</strong> {entry.current_acquired_amount}
+                              </p>
+                            ) : null}
+                            {entry?.external_coordination_link ? (
+                              <p>
+                                <a
+                                  href={entry.external_coordination_link}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  Tracking Link
+                                </a>
+                              </p>
+                            ) : null}
+                            {getExecutionNote(entry) ? (
+                              <p>{getExecutionNote(entry)}</p>
+                            ) : null}
+                          </div>
+                        );
+                      })}
                     </div>
                   </>
                 ) : null}
 
                 {personalVotingPanel}
 
-                {showExecutionRecordControls ? (
-                  <div className="moderation-box">
-                    <h4>Implementation Record</h4>
-
-                    <button
-                      type="button"
-                      onClick={handleCreateExecutionRecord}
-                      disabled={executionLoading}
-                    >
-                      {executionLoading ? "Creating..." : "Create Implementation Record"}
-                    </button>
-
-                    {executionError ? (
-                      <div className="error-box">{executionError}</div>
-                    ) : null}
-                    {executionSuccess ? (
-                      <div className="success-box">{executionSuccess}</div>
-                    ) : null}
-                  </div>
-                ) : null}
-
-                {isModerator ? (
+                {selectedThresholdSummary ? (
                   <>
-                    <h4>Vote Totals</h4>
-                    <div className="proposal-counts">
-                      <span>Support: {selectedProposal.proposal.support_count}</span>
-                      <span>Not fit: {selectedProposal.proposal.not_a_fit_count}</span>
-                      <span>Unclear: {selectedProposal.proposal.unclear_count}</span>
-                      <span>Unsafe: {selectedProposal.proposal.unsafe_count}</span>
-                      <span>Merge: {selectedProposal.proposal.merge_count}</span>
+                    <h4>Threshold Signal</h4>
+                    <div className="proposal-counts moderator-threshold-counts">
+                      <strong>{selectedThresholdSummary.label}</strong>
+                      {selectedThresholdSummary.metrics.map((metric) => (
+                        <span key={metric}>{metric}</span>
+                      ))}
                     </div>
                   </>
                 ) : null}
 
                 {showDistinctionForm ? (
-                  <form className="moderation-box" onSubmit={handleSaveDistinctionNote}>
+                  <form
+                    className="moderation-box moderator-box"
+                    onSubmit={handleSaveDistinctionNote}
+                  >
                     <h4>Distinction Note</h4>
 
                     <label className="moderation-field">
@@ -4272,7 +4597,7 @@ function App() {
                   </form>
                 ) : null}
                 {showDistinctionLocked ? (
-                  <div className="moderation-box">
+                  <div className="moderation-box moderator-box">
                     <h4>Distinction Note</h4>
                     <p className="muted">
                       This relationship can receive a distinction note after the
@@ -4282,7 +4607,7 @@ function App() {
                 ) : null}
 
                 {showMergeControls ? (
-                  <div className="moderation-box">
+                  <div className="moderation-box moderator-box">
                     <h4>Merge Action</h4>
 
                     <label className="moderation-field">
@@ -4370,7 +4695,7 @@ function App() {
                 ) : null}
 
                 {showModerationControls ? (
-                  <div className="moderation-box">
+                  <div className="moderation-box moderator-box">
                     <h4>Moderation Action</h4>
 
                     <label className="moderation-field">
@@ -4445,12 +4770,18 @@ function App() {
                 ) : null}
 
                 {showModerationObservationOnly ? (
-                  <div className="moderation-box">
+                  <div className="moderation-box moderator-box">
                     <h4>Moderator Observation</h4>
-                    <p className="muted">
-                      This proposal is visible for moderator awareness, but it has not
-                      reached the moderation action threshold and is not frozen.
-                    </p>
+                    {selectedProposal?.proposal?.review_reason === "high_moderation_hold" ? (
+                      <p className="muted">
+                        24-hour moderation hold active.
+                      </p>
+                    ) : (
+                      <p className="muted">
+                        This proposal is visible for moderator awareness, but it has not
+                        reached the moderation action threshold and is not frozen.
+                      </p>
+                    )}
                   </div>
                 ) : null}
 

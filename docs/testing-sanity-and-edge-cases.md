@@ -42,7 +42,7 @@ Expected active-cycle behavior:
 
 - public proposal lists and details do not expose live vote totals
 - active public users should not see live support ratios, unsafe fractions, merge percentages, or internal watch labels
-- moderators may see vote totals in moderator-only queues and detail controls
+- moderators may see only the threshold count signal that triggered a moderator review state
 - cycle outcome/result views may expose final counts after resolution
 - required-review cards must collect a real sentiment vote without displaying live totals to ordinary users
 
