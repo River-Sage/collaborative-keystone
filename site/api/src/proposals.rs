@@ -4440,14 +4440,14 @@ fn validate_completion_criteria(value: Option<&Value>) -> Result<(), AppError> {
                 "completion_criteria[{index}].completion_status must be one of: not_started, in_progress, completed, blocked."
             )));
         }
-        validate_object_text_or_empty_max(
+        validate_optional_object_text_max(
             object,
             "completion_criteria",
             index,
             "evidence_link",
             MAX_LINK_CHARS,
         )?;
-        validate_object_text_or_empty_max(
+        validate_optional_object_text_max(
             object,
             "completion_criteria",
             index,
@@ -4515,7 +4515,7 @@ fn validate_execution_tracking_entries(value: Option<&Value>) -> Result<(), AppE
             "target_unit",
             MAX_RESOURCE_UNIT_CHARS,
         )?;
-        validate_object_text_or_empty_max(
+        validate_optional_object_text_max(
             object,
             "execution_tracking_entries",
             index,
@@ -4534,14 +4534,14 @@ fn validate_execution_tracking_entries(value: Option<&Value>) -> Result<(), AppE
                 )));
             }
         }
-        validate_object_text_or_empty_max(
+        validate_optional_object_text_max(
             object,
             "execution_tracking_entries",
             index,
             "external_coordination_link",
             MAX_LINK_CHARS,
         )?;
-        validate_object_text_or_empty_max(
+        validate_optional_object_text_max(
             object,
             "execution_tracking_entries",
             index,
@@ -4595,25 +4595,6 @@ fn optional_object_text<'a>(
     match object.get(key) {
         Some(Value::String(value)) => Ok(Some(value.trim())),
         Some(Value::Null) | None => Ok(None),
-        _ => Err(AppError::BadRequest(format!(
-            "{field_name}[{index}].{key} must be a text field."
-        ))),
-    }
-}
-
-fn validate_object_text_or_empty_max(
-    object: &serde_json::Map<String, Value>,
-    field_name: &str,
-    index: usize,
-    key: &str,
-    max_chars: usize,
-) -> Result<(), AppError> {
-    match object.get(key) {
-        Some(Value::String(value)) => validate_text_max_chars(
-            value.trim(),
-            &format!("{field_name}[{index}].{key}"),
-            max_chars,
-        ),
         _ => Err(AppError::BadRequest(format!(
             "{field_name}[{index}].{key} must be a text field."
         ))),
