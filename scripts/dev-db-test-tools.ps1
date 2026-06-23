@@ -1223,16 +1223,14 @@ COMMIT;
 
 function Set-CkCyclePhase {
     param(
-        [ValidateSet("submission", "voting", "closed")]
-        [string]$Phase = "submission"
+        [ValidateSet("active", "closed")]
+        [string]$Phase = "active"
     )
 
-    if ($Phase -eq "submission") {
-        $dates = "starts_at = NOW() - INTERVAL '1 day', submission_ends_at = NOW() + INTERVAL '20 days', voting_ends_at = NOW() + INTERVAL '29 days'"
-    } elseif ($Phase -eq "voting") {
-        $dates = "starts_at = NOW() - INTERVAL '22 days', submission_ends_at = NOW() - INTERVAL '1 day', voting_ends_at = NOW() + INTERVAL '8 days'"
+    if ($Phase -eq "active") {
+        $dates = "starts_at = NOW() - INTERVAL '1 day', submission_ends_at = NOW() + INTERVAL '29 days', voting_ends_at = NOW() + INTERVAL '29 days'"
     } else {
-        $dates = "starts_at = NOW() - INTERVAL '31 days', submission_ends_at = NOW() - INTERVAL '10 days', voting_ends_at = NOW() - INTERVAL '1 day'"
+        $dates = "starts_at = NOW() - INTERVAL '31 days', submission_ends_at = NOW() - INTERVAL '1 day', voting_ends_at = NOW() - INTERVAL '1 day'"
     }
 
     $sql = @"

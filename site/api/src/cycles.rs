@@ -3,7 +3,6 @@ use sqlx::{PgPool, Row};
 use tracing::info;
 use uuid::Uuid;
 
-const SUBMISSION_DAYS: i64 = 21;
 const CYCLE_DAYS: i64 = 30;
 
 pub async fn ensure_active_world_cycle(db: &PgPool) -> Result<Option<Uuid>, sqlx::Error> {
@@ -150,7 +149,7 @@ pub async fn open_next_world_cycle_after_resolution(
     .bind(locale_id)
     .bind(next_cycle_number)
     .bind(starts_at)
-    .bind(starts_at + Duration::days(SUBMISSION_DAYS))
+    .bind(starts_at + Duration::days(CYCLE_DAYS))
     .bind(starts_at + Duration::days(CYCLE_DAYS))
     .fetch_one(&mut *tx)
     .await?;
@@ -188,7 +187,7 @@ async fn insert_cycle(
     .bind(locale_id)
     .bind(cycle_number)
     .bind(starts_at)
-    .bind(starts_at + Duration::days(SUBMISSION_DAYS))
+    .bind(starts_at + Duration::days(CYCLE_DAYS))
     .bind(starts_at + Duration::days(CYCLE_DAYS))
     .fetch_one(&mut **tx)
     .await?

@@ -144,16 +144,10 @@ dev-reset-test2
 
 ## Cycle Phase Switching
 
-Submission phase:
+Active phase:
 
 ```powershell
-Set-CkCyclePhase -Phase submission
-```
-
-Voting phase:
-
-```powershell
-Set-CkCyclePhase -Phase voting
+Set-CkCyclePhase -Phase active
 ```
 
 Closed phase:
@@ -162,7 +156,7 @@ Closed phase:
 Set-CkCyclePhase -Phase closed
 ```
 
-Use `closed` when testing moderator cycle outcome resolution. Use `submission` afterward to return to normal proposal-submission testing.
+Use `closed` when testing moderator cycle outcome resolution. Use `active` afterward to return to normal proposal, review, and voting testing.
 
 ## Moderation Reset
 

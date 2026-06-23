@@ -3,10 +3,9 @@
 ## Cycle
 
 - monthly
-- at cycle close, remaining active issue and solution proposals are archived as cycle history
+- throughout the active month, submission, required review, voting, duplicate-link signaling, and discussion can all happen concurrently after the participant satisfies review unlock
+- at closeout after the cycle ends, winners are resolved, results are published, remaining active issue and solution proposals are archived as cycle history, and the next fresh cycle opens
 - each new cycle starts with fresh active boards
-- days 1–21: issue submission and discussion
-- days 22–30: issue voting
 - the first cycle is issue-only until a winning issue is published
 - after that, the solution board works on the most recent published winning issue from a prior cycle
 - the solution board shows the target winning issue at the top so users can inspect the problem being solved
@@ -62,7 +61,7 @@ Each user may also independently cast on active proposals:
 
 Each merge vote must select the other active proposal it is targeting.
 
-Merge signaling unlocks after required reviews are complete for that board and may happen during the active cycle before the formal sentiment-voting window.
+Merge signaling unlocks after required reviews are complete for that board and may happen throughout the active cycle.
 
 Archive Board voting supports sentiment votes only. Historical archived proposals are not merged across cycles.
 

@@ -45,9 +45,9 @@ Collaborative Keystone runs in repeating monthly cycles.
 
 Recommended starting cadence:
 
-- **Days 1–21:** issue submission and discussion
-- **Days 22–30:** issue voting
-- During the same cycle, the Solution Board develops and votes on solutions for the prior cycle’s winning issue
+- **Active month:** submission, required review, voting, merge signaling, and discussion run concurrently after participants satisfy review unlock
+- **Closeout:** after the cycle ends, winners are resolved, results are published, active proposals archive as cycle history, and the next fresh cycle opens
+- During each active month, the Solution Board develops and votes on solutions for the prior cycle’s winning issue
 
 This creates a repeating rhythm:
 

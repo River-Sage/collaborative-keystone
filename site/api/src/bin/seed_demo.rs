@@ -516,7 +516,7 @@ async fn ensure_active_cycle(db: &PgPool) -> Result<ActiveCycle, sqlx::Error> {
     )
     .bind(locale_id)
     .bind(starts_at)
-    .bind(starts_at + Duration::days(21))
+    .bind(starts_at + Duration::days(30))
     .bind(starts_at + Duration::days(30))
     .fetch_one(db)
     .await?;
@@ -594,7 +594,7 @@ async fn ensure_solution_target_issue(
     .bind(active_cycle.locale_id)
     .bind(prior_cycle_number)
     .bind(starts_at)
-    .bind(starts_at + Duration::days(21))
+    .bind(starts_at + Duration::days(30))
     .bind(starts_at + Duration::days(30))
     .fetch_one(db)
     .await?

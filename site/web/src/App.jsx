@@ -2442,7 +2442,7 @@ function App() {
             ? "Archive voting unlocks after required reviews are complete."
             : unlockStatus?.voting_open
               ? "Voting unlocks after required reviews are complete."
-              : "Voting is closed for this cycle phase."}
+              : "Voting is closed for this cycle."}
         </p>
       ) : (
         <div className="vote-grid">
@@ -2989,7 +2989,7 @@ function App() {
                 <p className="muted">
                   {unlockStatus?.submission_open
                     ? "Submission opens after the review requirement is complete."
-                    : "Submission is closed for this cycle phase."}
+                    : "Submission is closed for this cycle."}
                 </p>
               ) : null}
 
@@ -3326,7 +3326,7 @@ function App() {
               <div className="compact-card">
                 <strong>Cycle {outcomeData?.cycle?.cycle_number || "current"}</strong>
                 <p>
-                  Voting ends {outcomeData?.cycle?.voting_ends_at || "after the voting window"}.
+                  Cycle closes {outcomeData?.cycle?.voting_ends_at || "at month end"}.
                 </p>
                 {outcomeData?.results?.length ? (
                   <p className="muted">Published results are already stored.</p>

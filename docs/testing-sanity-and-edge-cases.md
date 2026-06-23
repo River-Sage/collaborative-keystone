@@ -76,17 +76,12 @@ Expected after participation reset:
 
 ## Cycle Phases
 
-Submission phase:
+Active phase:
 
 - submissions can open after review unlock
-- formal sentiment voting is closed
-- duplicate-link signaling can work after review unlock because it is active-cycle signaling
-
-Voting phase:
-
-- submissions are closed
 - sentiment voting can open after review unlock
 - duplicate-link signaling remains review-gated
+- submission, review, voting, duplicate-link signaling, and discussion all happen concurrently during the monthly active cycle
 
 Closed phase:
 
@@ -97,8 +92,7 @@ Closed phase:
 Useful commands:
 
 ```powershell
-Set-CkCyclePhase -Phase submission
-Set-CkCyclePhase -Phase voting
+Set-CkCyclePhase -Phase active
 Set-CkCyclePhase -Phase closed
 ```
 

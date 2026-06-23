@@ -28,7 +28,7 @@ DEV_ACCOUNTS = (
     "moderator@example.com",
 )
 
-PHASES = ("submission", "voting", "closed")
+PHASES = ("active", "closed")
 
 
 @dataclass(frozen=True)
@@ -114,7 +114,7 @@ CYCLE_COMMANDS = (
     DbCommand(
         title="Set cycle phase",
         function_name="Set-CkCyclePhase",
-        description="Moves the active cycle dates into submission, voting, or closed phase.",
+        description="Moves the active cycle dates into active-month or closed state.",
         params=("Phase",),
     ),
     DbCommand(

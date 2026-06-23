@@ -60,10 +60,11 @@ This means:
 
 ### 3.1 Cycle duration
 
-Each cycle lasts **30 days** total:
+Each cycle lasts **30 days** total.
 
-* **21 days** submission and discussion
-* **9 days** voting
+During the active cycle window, submission, required review, voting, merge signaling, and discussion may all happen concurrently after the participant satisfies the relevant review-unlock requirement.
+
+At the end of the 30-day cycle, the cycle closes. During closeout, winners are resolved and published, remaining active proposals are archived as cycle history, and the next cycle starts with fresh active boards. The system is a continuous loop of cycles; the only expected gap between cycles is the short operational closeout period needed to resolve and publish results.
 
 ### 3.2 Concurrent board behavior
 
@@ -458,7 +459,7 @@ Each user may also independently cast exactly one merge vote per active proposal
 
 Each merge vote must identify the other active proposal it is targeting. Untargeted merge votes are not valid in v1 because merge thresholds are pair-specific.
 
-Merge signaling is available on active proposals after the participant has completed the required review unlock for that board. It does not need to wait for the formal sentiment-voting window.
+Merge signaling is available on active proposals after the participant has completed the required review unlock for that board. It is part of the same active monthly participation window as sentiment voting.
 
 This means a user may cast:
 
@@ -510,7 +511,7 @@ Users must not see:
 
 ### 12.3 After cycle completion
 
-The platform may publish final cycle results, including vote totals and outcome data, after the voting period has closed.
+The platform may publish final cycle results, including vote totals and outcome data, after the monthly cycle has closed.
 
 ---
 

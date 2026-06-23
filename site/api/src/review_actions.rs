@@ -376,7 +376,7 @@ pub async fn ensure_submit_unlocked(
 
     if !unlock_state.submission_open {
         return Err(AppError::BadRequest(format!(
-            "Submission is closed for the current cycle phase: {}.",
+            "Submission is closed for the current cycle: {}.",
             unlock_state.cycle_phase
         )));
     }
@@ -400,7 +400,7 @@ pub async fn ensure_voting_unlocked(
 
     if !unlock_state.voting_open {
         return Err(AppError::BadRequest(format!(
-            "Voting is closed for the current cycle phase: {}.",
+            "Voting is closed for the current cycle: {}.",
             unlock_state.cycle_phase
         )));
     }
@@ -466,14 +466,13 @@ pub async fn compute_unlock_state(
     let target_review_actions = available_or_completed.clamp(0, 4);
     let review_unlocked = completed_review_actions >= target_review_actions;
     let now = Utc::now();
-    let submission_open = now >= active_cycle.starts_at && now < active_cycle.submission_ends_at;
-    let voting_open = now >= active_cycle.submission_ends_at && now < active_cycle.voting_ends_at;
+    let cycle_open = now >= active_cycle.starts_at && now < active_cycle.voting_ends_at;
+    let submission_open = cycle_open;
+    let voting_open = cycle_open;
     let cycle_phase = if now < active_cycle.starts_at {
         "pending"
-    } else if submission_open {
-        "submission"
-    } else if voting_open {
-        "voting"
+    } else if cycle_open {
+        "active"
     } else {
         "closed"
     }
