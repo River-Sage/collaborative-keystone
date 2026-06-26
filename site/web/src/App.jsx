@@ -15,6 +15,31 @@ const TABS = [
   { key: "account", label: "Account" },
 ];
 
+const INTRO_STORAGE_KEY = "ck_intro_dismissed_v1";
+const INTRO_ITEMS = [
+  {
+    title: "Issues",
+    body: "Name and review the problems the current World cycle should prioritize.",
+  },
+  {
+    title: "Solutions",
+    body: "Work on solutions for the most recent published winning issue.",
+  },
+  {
+    title: "Implementations",
+    body: "Track winning solutions after they move from proposal to real-world follow-through.",
+  },
+  {
+    title: "Archive",
+    body: "Read historical proposals, copy cycle history into new submissions, and use eligible appeal paths.",
+  },
+  {
+    title: "Moderator Tools",
+    body: "Moderators handle outcomes, review queues, trust flags, appeals, and reconsideration without bypassing cycle rules.",
+    moderatorOnly: true,
+  },
+];
+
 const PRIMARY_NAV_TAB_KEYS = new Set(["issues", "solutions"]);
 const MODERATOR_ROLES = new Set(["moderator"]);
 const STANDARD_REQUIRED_REVIEW_COUNT = 4;
@@ -197,6 +222,7 @@ function formatPublicUserId(value) {
 function App() {
   const [me, setMe] = useState(null);
   const [sessionChecked, setSessionChecked] = useState(false);
+  const [introOpen, setIntroOpen] = useState(false);
 
   const [authMode, setAuthMode] = useState("login");
   const [email, setEmail] = useState(DEFAULT_AUTH_EMAIL);
@@ -339,10 +365,19 @@ function App() {
 
   const activeTabIsModerator = Boolean(activeTabConfig?.moderatorOnly);
 
+  function shouldOpenIntro() {
+    try {
+      return window.localStorage.getItem(INTRO_STORAGE_KEY) !== "true";
+    } catch {
+      return true;
+    }
+  }
+
   async function initializeSession() {
     try {
       const data = await api.me();
       setMe(data);
+      setIntroOpen(shouldOpenIntro());
     } catch {
       setMe(null);
     } finally {
@@ -352,6 +387,7 @@ function App() {
 
   function clearAppStateForSignedOutUser() {
     setMe(null);
+    setIntroOpen(false);
     setItems([]);
     setItemsError("");
     setSelectedProposal(null);
@@ -408,6 +444,19 @@ function App() {
     setVerificationToken("");
     setVerificationError("");
     setVerificationSuccess("");
+  }
+
+  function handleCloseIntro() {
+    try {
+      window.localStorage.setItem(INTRO_STORAGE_KEY, "true");
+    } catch {
+      // Local storage can be unavailable in restricted browser modes.
+    }
+    setIntroOpen(false);
+  }
+
+  function handleShowIntro() {
+    setIntroOpen(true);
   }
 
   async function handleProtectedError(error) {
@@ -624,11 +673,13 @@ function App() {
       if (authMode === "login") {
         const loginData = await api.login(email, password);
         setMe(loginData);
+        setIntroOpen(shouldOpenIntro());
         handleTabChange("issues");
       } else if (authMode === "register") {
         const registerData = await api.register(email, password);
         const loginData = await api.login(email, password);
         setMe(loginData);
+        setIntroOpen(shouldOpenIntro());
         handleTabChange("issues");
         if (registerData.dev_verification_token) {
           setVerificationToken(registerData.dev_verification_token);
@@ -1785,6 +1836,88 @@ function App() {
     );
   }
 
+  function getViewContextText() {
+    if (showingAccountView || showingSubmissionView) return "";
+
+    if (activeTab === "issues") {
+      if (needsRequiredReview) {
+        return "Required review comes first. After unlock, this board accepts issue submissions and sentiment votes during the active monthly cycle.";
+      }
+      return "Issues are the current cycle's problem proposals. Submit and vote during the same active monthly cycle after review unlock.";
+    }
+
+    if (activeTab === "solutions") {
+      if (!solutionTargetProposal) {
+        return "The Solution Board opens after an issue winner has been published from a prior cycle.";
+      }
+      return `Solutions should address the current target issue: ${solutionTargetProposal.title}.`;
+    }
+
+    if (activeTab === "implementations") {
+      return "Implementations are winning solutions that moved into execution tracking after cycle closeout.";
+    }
+
+    if (activeTab === "outcomes") {
+      return outcomeData?.can_resolve
+        ? "The cycle is closed and ready for moderator closeout."
+        : "Outcomes are published after the monthly cycle closes.";
+    }
+
+    if (activeTab === "reviewQueue") {
+      return "Review Queue shows proposals that reached merge or moderation review thresholds.";
+    }
+
+    if (activeTab === "trustReview") {
+      return "Trust Review holds suspicious activity flags for moderator acknowledgement or dismissal.";
+    }
+
+    if (activeTab === "appeals") {
+      return "Appeals are author requests to review eligible moderation archives.";
+    }
+
+    if (activeTab === "reconsiderations") {
+      return "Reconsideration reviews archived proposals after a temporary 72-hour community signal window.";
+    }
+
+    if (activeTab === "archive") {
+      return "Archive preserves proposals as history. Cycle-closed items can be copied into a fresh submission.";
+    }
+
+    return "";
+  }
+
+  function getEmptyStateText() {
+    if (activeTab === "reviewPool") return "No required reviews are waiting here.";
+    if (activeTab === "issues") return "No active issues yet. Start the cycle by submitting one.";
+    if (activeTab === "solutions") {
+      return solutionTargetProposal
+        ? "No active solutions yet. Submit the first proposal for the target issue."
+        : "No solution target is published yet.";
+    }
+    if (activeTab === "implementations") {
+      return "No implementations yet. Winning solutions appear here after cycle closeout.";
+    }
+    if (activeTab === "outcomes") {
+      return "No outcome candidates are ready yet.";
+    }
+    if (activeTab === "reviewQueue") {
+      return "No proposals are waiting for moderator review.";
+    }
+    if (activeTab === "trustReview") {
+      return "No trust flags are open.";
+    }
+    if (activeTab === "appeals") {
+      return "No appeals are waiting.";
+    }
+    if (activeTab === "reconsiderations") {
+      return "No reconsideration windows are waiting.";
+    }
+    if (activeTab === "archive") {
+      return "No archived proposals yet.";
+    }
+    return "Nothing to show here yet.";
+  }
+
   function getItemCounts(item) {
     const source = item?.winning_proposal || item?.proposal || item;
     return {
@@ -2317,6 +2450,7 @@ function App() {
     Boolean(solutionTargetProposal);
   const detailDockLabel = showingSolutionSubmissionView ? "Issue" : selectedTitle;
   const showingAccountView = activeTab === "account";
+  const viewContextText = getViewContextText();
   const canSearchCurrentView = !openingPhaseLocked && items.length > 0;
   const visibleItems = searchQuery.trim()
     ? items.filter((item) => itemMatchesSearch(item, searchQuery))
@@ -2848,6 +2982,39 @@ function App() {
         </div>
       </header>
 
+      {introOpen ? (
+        <div className="intro-backdrop" role="dialog" aria-modal="true">
+          <section className="intro-panel">
+            <div className="tool-section-header">
+              <h2>Welcome to Keystone</h2>
+              <span className="state-pill subtle-pill">Quick intro</span>
+            </div>
+            <p className="muted">
+              Each month is one active cycle. Submit, review, vote, and flag
+              duplicates during that cycle; winners are published at closeout.
+            </p>
+            <div className="intro-grid">
+              {INTRO_ITEMS.filter((item) => !item.moderatorOnly || isModerator).map(
+                (item) => (
+                  <div className="intro-item" key={item.title}>
+                    <strong>{item.title}</strong>
+                    <p>{item.body}</p>
+                  </div>
+                )
+              )}
+            </div>
+            <div className="action-row">
+              <button type="button" onClick={handleCloseIntro}>
+                Got It
+              </button>
+              <button type="button" className="quiet-button" onClick={handleCloseIntro}>
+                Skip
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
       {!me.email_verified ? (
         <section className="panel verification-panel">
           <div className="tool-section-header">
@@ -2949,6 +3116,12 @@ function App() {
 
           {unlockError ? <div className="error-box">{unlockError}</div> : null}
 
+          {viewContextText ? (
+            <div className="view-context-card">
+              <p>{viewContextText}</p>
+            </div>
+          ) : null}
+
           {showingAccountView ? (
             <section className="tool-section account-panel">
               <div className="user-chip account-chip">
@@ -2959,6 +3132,14 @@ function App() {
               <button type="button" onClick={handleLogout}>
                 Logout
               </button>
+
+              <button type="button" onClick={handleShowIntro}>
+                Show Intro
+              </button>
+
+              <p className="muted small-muted">
+                Full manual: docs/user-manual.md
+              </p>
             </section>
           ) : null}
 
@@ -3370,9 +3551,7 @@ function App() {
 
           {!showingSubmissionView && !showingAccountView && !itemsLoading && !itemsError && items.length === 0 ? (
             <p className="muted">
-              {activeTab === "reviewPool"
-                ? "No required reviews are waiting here."
-                : "Nothing to show here yet."}
+              {getEmptyStateText()}
             </p>
           ) : null}
           {!showingSubmissionView && !showingAccountView && !itemsLoading && !itemsError && items.length > 0 && visibleItems.length === 0 ? (
