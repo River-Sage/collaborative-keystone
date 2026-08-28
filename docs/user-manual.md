@@ -1,6 +1,6 @@
 # Collaborative Keystone User Manual
 
-Collaborative Keystone runs in monthly cycles. During an active cycle, verified users can submit, review, vote, and signal duplicate proposals after completing any required review unlock. When the cycle closes, moderators publish winners, active proposals move to history, and the next cycle starts fresh after closeout.
+Collaborative Keystone runs in UTC calendar-month cycles. During an active cycle, verified users can submit, review, vote, and signal duplicate proposals after completing any required review unlock. When the month closes, moderators publish winners, active proposals move to history, and the next cycle starts fresh after closeout.
 
 ## First Steps
 

@@ -1,4 +1,4 @@
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Datelike, TimeZone, Utc};
 use dotenvy::dotenv;
 use serde_json::{Value, json};
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
@@ -591,7 +591,7 @@ async fn ensure_active_cycle(db: &PgPool, locale: &SeedLocale) -> Result<ActiveC
         });
     }
 
-    let starts_at = Utc::now();
+    let starts_at = calendar_month_start(Utc::now());
     let row = sqlx::query(
         r#"
         INSERT INTO cycles (
@@ -608,8 +608,8 @@ async fn ensure_active_cycle(db: &PgPool, locale: &SeedLocale) -> Result<ActiveC
     )
     .bind(locale_id)
     .bind(starts_at)
-    .bind(starts_at + Duration::days(30))
-    .bind(starts_at + Duration::days(30))
+    .bind(next_calendar_month_start(starts_at))
+    .bind(next_calendar_month_start(starts_at))
     .fetch_one(db)
     .await?;
 
@@ -666,7 +666,7 @@ async fn ensure_solution_target_issue(
     }
 
     let prior_cycle_number = active_cycle.cycle_number - 1;
-    let starts_at = Utc::now() - Duration::days(35);
+    let starts_at = previous_calendar_month_start(Utc::now());
     let prior_cycle_id: Uuid = sqlx::query(
         r#"
         INSERT INTO cycles (
@@ -686,8 +686,8 @@ async fn ensure_solution_target_issue(
     .bind(active_cycle.locale_id)
     .bind(prior_cycle_number)
     .bind(starts_at)
-    .bind(starts_at + Duration::days(30))
-    .bind(starts_at + Duration::days(30))
+    .bind(next_calendar_month_start(starts_at))
+    .bind(next_calendar_month_start(starts_at))
     .fetch_one(db)
     .await?
     .try_get("id")?;
@@ -763,6 +763,34 @@ async fn ensure_solution_target_issue(
     .await?;
 
     Ok(issue_id)
+}
+
+fn calendar_month_start(value: DateTime<Utc>) -> DateTime<Utc> {
+    utc_ymd(value.year(), value.month(), 1)
+}
+
+fn previous_calendar_month_start(value: DateTime<Utc>) -> DateTime<Utc> {
+    let (year, month) = if value.month() == 1 {
+        (value.year() - 1, 12)
+    } else {
+        (value.year(), value.month() - 1)
+    };
+    utc_ymd(year, month, 1)
+}
+
+fn next_calendar_month_start(value: DateTime<Utc>) -> DateTime<Utc> {
+    let (year, month) = if value.month() == 12 {
+        (value.year() + 1, 1)
+    } else {
+        (value.year(), value.month() + 1)
+    };
+    utc_ymd(year, month, 1)
+}
+
+fn utc_ymd(year: i32, month: u32, day: u32) -> DateTime<Utc> {
+    Utc.with_ymd_and_hms(year, month, day, 0, 0, 0)
+        .single()
+        .expect("valid UTC calendar month boundary")
 }
 
 async fn latest_prior_published_issue_winner(

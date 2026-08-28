@@ -31,7 +31,7 @@ $env:CK_GLOBAL_REGISTRY_ORIGIN = "https://collaborativekeystone.com"
 $env:CK_REGISTRY_STATUS = "authorized"
 ```
 
-The API upserts the configured locale on startup and opens that locale's active monthly cycle if none exists.
+The API upserts the configured locale on startup and opens that locale's active UTC calendar-month cycle if none exists.
 
 Registry JSON should use `locale_type` for locale entries. The API also accepts `type` as a convenience alias for operator-written config.
 

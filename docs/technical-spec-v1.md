@@ -60,11 +60,13 @@ This means:
 
 ### 3.1 Cycle duration
 
-Each cycle lasts **30 days** total.
+Each cycle lasts one **UTC calendar month**.
 
 During the active cycle window, submission, required review, voting, merge signaling, and discussion may all happen concurrently after the participant satisfies the relevant review-unlock requirement.
 
-At the end of the 30-day cycle, the cycle closes. During closeout, winners are resolved and published, remaining active proposals are archived as cycle history, and the next cycle starts with fresh active boards. The system is a continuous loop of cycles; the only expected gap between cycles is the short operational closeout period needed to resolve and publish results.
+At the end of the calendar month, the cycle closes. During closeout, winners are resolved and published, remaining active proposals are archived as cycle history, and the next cycle starts with fresh active boards. The system is a continuous loop of cycles; the only expected gap between cycles is the short operational closeout period needed to resolve and publish results.
+
+For v1, cycle boundaries are anchored to UTC month boundaries: `00:00:00 UTC` on the first day of a month through `00:00:00 UTC` on the first day of the next month. A fresh deployment that starts mid-month joins the current UTC calendar month instead of opening a rolling 30-day launch cycle. Future locale deployments may add locale-specific timezone boundaries if the project decides that local civic calendars are more appropriate for non-global instances.
 
 ### 3.2 Concurrent board behavior
 

@@ -19,7 +19,7 @@ Version 1 is not trying to be:
 - World locale only
 - Issue Board
 - Solution Board
-- monthly cycle
+- UTC calendar-month cycle
 - hidden live vote totals
 - archive instead of delete
 - merge distinction notes

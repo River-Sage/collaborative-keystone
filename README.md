@@ -58,12 +58,12 @@ Version 1 is intentionally narrow. It is designed to prove the core mechanism fi
 
 ## Core Cycle
 
-Collaborative Keystone runs in repeating monthly cycles.
+Collaborative Keystone runs in repeating UTC calendar-month cycles.
 
 Recommended starting cadence:
 
-- **Active month:** submission, required review, voting, merge signaling, and discussion run concurrently after participants satisfy review unlock
-- **Closeout:** after the cycle ends, winners are resolved, results are published, active proposals archive as cycle history, and the next fresh cycle opens
+- **Active calendar month:** submission, required review, voting, merge signaling, and discussion run concurrently after participants satisfy review unlock
+- **Closeout:** after the month ends, winners are resolved, results are published, active proposals archive as cycle history, and the next fresh cycle opens
 - During each active month, the Solution Board develops and votes on solutions for the prior cycle’s winning issue
 
 This creates a repeating rhythm:

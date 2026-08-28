@@ -2,7 +2,7 @@
 
 ## Cycle
 
-- monthly
+- UTC calendar-month cycles
 - throughout the active month, submission, required review, voting, duplicate-link signaling, and discussion can all happen concurrently after the participant satisfies review unlock
 - at closeout after the cycle ends, winners are resolved, results are published, remaining active issue and solution proposals are archived as cycle history, and the next fresh cycle opens
 - each new cycle starts with fresh active boards

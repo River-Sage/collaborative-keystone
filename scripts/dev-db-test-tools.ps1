@@ -798,9 +798,9 @@ INSERT INTO cycles (
 SELECT
     id,
     1,
-    NOW() - INTERVAL '1 day',
-    NOW() + INTERVAL '29 days',
-    NOW() + INTERVAL '29 days',
+    date_trunc('month', NOW()),
+    date_trunc('month', NOW()) + INTERVAL '1 month',
+    date_trunc('month', NOW()) + INTERVAL '1 month',
     TRUE
 FROM locales
 WHERE slug = 'world';
@@ -1498,9 +1498,9 @@ function Set-CkCyclePhase {
     )
 
     if ($Phase -eq "active") {
-        $dates = "starts_at = NOW() - INTERVAL '1 day', submission_ends_at = NOW() + INTERVAL '29 days', voting_ends_at = NOW() + INTERVAL '29 days'"
+        $dates = "starts_at = date_trunc('month', NOW()), submission_ends_at = date_trunc('month', NOW()) + INTERVAL '1 month', voting_ends_at = date_trunc('month', NOW()) + INTERVAL '1 month'"
     } else {
-        $dates = "starts_at = NOW() - INTERVAL '31 days', submission_ends_at = NOW() - INTERVAL '1 day', voting_ends_at = NOW() - INTERVAL '1 day'"
+        $dates = "starts_at = date_trunc('month', NOW()) - INTERVAL '1 month', submission_ends_at = date_trunc('month', NOW()), voting_ends_at = date_trunc('month', NOW())"
     }
 
     $sql = @"
