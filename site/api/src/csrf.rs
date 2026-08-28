@@ -11,9 +11,10 @@ use crate::{auth::SESSION_COOKIE_NAME, error::AppError};
 pub const CSRF_COOKIE_NAME: &str = "ck_csrf";
 pub const CSRF_HEADER_NAME: &str = "x-csrf-token";
 
-const PUBLIC_POST_PATHS: [&str; 5] = [
+const PUBLIC_POST_PATHS: [&str; 6] = [
     "/auth/login",
     "/auth/register",
+    "/auth/verify-email-link",
     "/auth/password-reset/request",
     "/auth/password-reset/confirm",
     "/bootstrap/first-moderator",

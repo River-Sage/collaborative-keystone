@@ -179,6 +179,11 @@ pub struct VerifyEmailResponse {
     pub email_verified: bool,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct VerifyEmailLinkRequest {
+    pub token: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct EmailVerificationTokenResponse {
     pub ok: bool,
@@ -461,6 +466,151 @@ pub async fn verify_email_handler(
         ok: true,
         email_verified: true,
     }))
+}
+
+pub async fn verify_email_link_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(payload): Json<VerifyEmailLinkRequest>,
+) -> Result<(StatusCode, HeaderMap, Json<LoginResponse>), AppError> {
+    let token = payload.token.trim();
+    if token.is_empty() {
+        return Err(AppError::BadRequest(
+            "Verification link is missing its code.".to_string(),
+        ));
+    }
+
+    enforce_auth_rate_limit(
+        &state,
+        &headers,
+        "verify-email-link",
+        "link",
+        VERIFY_EMAIL_RATE_LIMIT_MAX,
+    )
+    .await?;
+
+    let mut tx = state.db.begin().await.map_err(|err| {
+        error!(
+            "database error starting email verification link transaction: {}",
+            err
+        );
+        AppError::Internal("Failed to verify email.".to_string())
+    })?;
+
+    let token_row = sqlx::query(
+        r#"
+        SELECT
+            evt.id AS token_id,
+            u.id AS user_id,
+            u.email,
+            u.role_code,
+            u.last_login_at IS NULL AS onboarding_required
+        FROM email_verification_tokens evt
+        JOIN users u ON u.id = evt.user_id
+        WHERE evt.token = encode(digest($1, 'sha256'), 'hex')
+          AND evt.consumed_at IS NULL
+          AND evt.expires_at > NOW()
+        LIMIT 1
+        FOR UPDATE OF evt, u
+        "#,
+    )
+    .bind(token)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|err| {
+        error!(
+            "database error loading email verification link token: {}",
+            err
+        );
+        AppError::Internal("Failed to verify email.".to_string())
+    })?;
+
+    let Some(token_row) = token_row else {
+        return Err(AppError::BadRequest(
+            "Verification link is invalid or expired.".to_string(),
+        ));
+    };
+
+    let user_id: Uuid = token_row.try_get("user_id").map_err(internal_db_err)?;
+    let email: String = token_row.try_get("email").map_err(internal_db_err)?;
+    let role_code: String = token_row.try_get("role_code").map_err(internal_db_err)?;
+    let onboarding_required: bool = token_row
+        .try_get("onboarding_required")
+        .map_err(internal_db_err)?;
+
+    sqlx::query(
+        r#"
+        UPDATE users
+        SET email_verified = TRUE,
+            last_login_at = NOW()
+        WHERE id = $1
+        "#,
+    )
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|err| {
+        error!("database error marking email verified from link: {}", err);
+        AppError::Internal("Failed to verify email.".to_string())
+    })?;
+
+    sqlx::query(
+        r#"
+        UPDATE email_verification_tokens
+        SET consumed_at = NOW()
+        WHERE user_id = $1
+          AND consumed_at IS NULL
+        "#,
+    )
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|err| {
+        error!(
+            "database error consuming email verification tokens from link: {}",
+            err
+        );
+        AppError::Internal("Failed to verify email.".to_string())
+    })?;
+
+    let session_token = generate_session_token();
+    let csrf_token = generate_session_token();
+    let expires_at = chrono::Utc::now() + chrono::Duration::hours(SESSION_DURATION_HOURS);
+
+    sqlx::query(
+        r#"
+        INSERT INTO sessions (user_id, session_token, expires_at)
+        VALUES ($1, encode(digest($2, 'sha256'), 'hex'), $3)
+        "#,
+    )
+    .bind(user_id)
+    .bind(&session_token)
+    .bind(expires_at)
+    .execute(&mut *tx)
+    .await
+    .map_err(|err| {
+        error!(
+            "database error creating session after email verification link: {}",
+            err
+        );
+        AppError::Internal("Failed to verify email.".to_string())
+    })?;
+
+    tx.commit().await.map_err(|err| {
+        error!("database error committing email verification link: {}", err);
+        AppError::Internal("Failed to verify email.".to_string())
+    })?;
+
+    let response_headers = build_session_response_headers(&session_token, &csrf_token)?;
+    let response = LoginResponse {
+        ok: true,
+        email,
+        email_verified: true,
+        role_code,
+        onboarding_required,
+    };
+
+    Ok((StatusCode::OK, response_headers, Json(response)))
 }
 
 pub async fn email_verification_token_handler(
@@ -772,17 +922,7 @@ pub async fn login_handler(
         AppError::Internal("Failed to process login.".to_string())
     })?;
 
-    let mut response_headers = HeaderMap::new();
-    response_headers.append(
-        SET_COOKIE,
-        HeaderValue::from_str(&build_session_cookie(&session_token)?)
-            .map_err(|_| AppError::Internal("Failed to set session cookie.".to_string()))?,
-    );
-    response_headers.append(
-        SET_COOKIE,
-        HeaderValue::from_str(&build_csrf_cookie(&csrf_token)?)
-            .map_err(|_| AppError::Internal("Failed to set CSRF cookie.".to_string()))?,
-    );
+    let response_headers = build_session_response_headers(&session_token, &csrf_token)?;
 
     let response = LoginResponse {
         ok: true,
@@ -1017,6 +1157,25 @@ fn build_csrf_cookie(token: &str) -> Result<String, AppError> {
         max_age = SESSION_DURATION_HOURS * 60 * 60,
         secure = session_cookie_secure_suffix()
     ))
+}
+
+fn build_session_response_headers(
+    session_token: &str,
+    csrf_token: &str,
+) -> Result<HeaderMap, AppError> {
+    let mut response_headers = HeaderMap::new();
+    response_headers.append(
+        SET_COOKIE,
+        HeaderValue::from_str(&build_session_cookie(session_token)?)
+            .map_err(|_| AppError::Internal("Failed to set session cookie.".to_string()))?,
+    );
+    response_headers.append(
+        SET_COOKIE,
+        HeaderValue::from_str(&build_csrf_cookie(csrf_token)?)
+            .map_err(|_| AppError::Internal("Failed to set CSRF cookie.".to_string()))?,
+    );
+
+    Ok(response_headers)
 }
 
 fn clear_session_cookie() -> Result<String, AppError> {

@@ -5,7 +5,7 @@ Collaborative Keystone runs in UTC calendar-month cycles. During an active cycle
 ## First Steps
 
 1. Register or log in.
-2. Verify your email.
+2. Click Verify Email in your email. If the link does not work, paste the backup code into Keystone.
 3. Open Issues or Solutions.
 4. If required reviews are waiting, review the proposal shown and cast a real sentiment vote.
 5. After review unlock, submit, vote, or signal duplicates on active proposals. New submissions show a preview before you confirm.

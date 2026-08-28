@@ -439,6 +439,30 @@ function turnstileStatusMessage(status) {
   return "";
 }
 
+function getEmailVerificationLinkToken() {
+  try {
+    const url = new URL(window.location.href);
+    const path = url.pathname.replace(/\/$/, "");
+    if (path !== "/verify-email") return "";
+
+    const hashToken = new URLSearchParams(url.hash.replace(/^#/, "")).get("token");
+    return (hashToken || url.searchParams.get("token") || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+function clearEmailVerificationLinkUrl() {
+  try {
+    const url = new URL(window.location.href);
+    if (url.pathname.replace(/\/$/, "") !== "/verify-email") return;
+
+    window.history.replaceState({}, document.title, "/");
+  } catch {
+    // History can be unavailable in restricted browser modes.
+  }
+}
+
 function App() {
   const [me, setMe] = useState(null);
   const [sessionChecked, setSessionChecked] = useState(false);
@@ -650,6 +674,30 @@ function App() {
   }
 
   async function initializeSession() {
+    const emailVerificationLinkToken = getEmailVerificationLinkToken();
+    if (emailVerificationLinkToken) {
+      try {
+        const data = await api.verifyEmailLink(emailVerificationLinkToken);
+        clearEmailVerificationLinkUrl();
+        setMe(data);
+        setIntroOpen(shouldOpenIntro(data));
+        setTutorialOpen(false);
+        setActiveTab("issues");
+        setVerificationSuccess("Email verified.");
+      } catch (error) {
+        clearEmailVerificationLinkUrl();
+        setMe(null);
+        setAuthMode("login");
+        setAuthError(
+          error.message ||
+            "Verification link is invalid or expired. Log in and send a new email."
+        );
+      } finally {
+        setSessionChecked(true);
+      }
+      return;
+    }
+
     try {
       const data = await api.me();
       setMe(data);
@@ -1199,10 +1247,10 @@ function App() {
           );
         } else if (registerData.verification_email_sent === false) {
           setAuthSuccess(
-            "Account created, but verification email could not be sent. Log in and use Send Verification once email is configured."
+            "Account created, but verification email could not be sent. Log in and use Send New Email once email is configured."
           );
         } else if (registerData.verification_required) {
-          setAuthSuccess("Account created. Check your email, then log in to verify.");
+          setAuthSuccess("Account created. Check your email and click Verify Email.");
         } else {
           setAuthSuccess("Account created. Log in when ready.");
         }
@@ -1250,7 +1298,7 @@ function App() {
       setMe(data);
       setVerificationToken("");
       setVerificationSuccess("Email verified.");
-      setIntroOpen(false);
+      setIntroOpen(shouldOpenIntro(data));
       setTutorialOpen(false);
       setActiveTab("issues");
       await loadTabData("issues", { canParticipate: Boolean(data.email_verified) });
@@ -1281,7 +1329,9 @@ function App() {
           "Verification email could not be sent. Try again in a moment."
         );
       } else {
-        setVerificationSuccess("Verification instructions sent.");
+        setVerificationSuccess(
+          "Verification email sent. Click Verify Email in the email, or paste the backup code below."
+        );
       }
     } catch (error) {
       if (await handleProtectedError(error)) return;
@@ -3939,8 +3989,13 @@ function App() {
         </div>
 
         <form className="proposal-form" onSubmit={handleVerifyEmail}>
+          <p className="muted">
+            Check your email and click Verify Email. If that does not work, paste
+            the backup code below.
+          </p>
+
           <label>
-            Verification Token
+            Verification Code
             <input
               value={verificationToken}
               onChange={(event) => setVerificationToken(event.target.value)}
@@ -3965,7 +4020,7 @@ function App() {
               onClick={handleRequestVerificationToken}
               disabled={verificationLoading}
             >
-              Send Verification
+              Send New Email
             </button>
           </div>
         </form>

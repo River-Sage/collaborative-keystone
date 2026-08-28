@@ -95,6 +95,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ token }),
     }),
+  verifyEmailLink: (token) =>
+    apiFetch("/auth/verify-email-link", {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    }),
   requestEmailVerificationToken: () =>
     apiFetch("/auth/email-verification-token", {
       method: "POST",

@@ -53,7 +53,7 @@ mod votes;
 use auth::{
     email_verification_token_handler, login_handler, logout_handler, me_handler,
     password_reset_confirm_handler, password_reset_request_handler, register_handler,
-    verify_email_handler,
+    verify_email_handler, verify_email_link_handler,
 };
 use my_queue::my_review_queues_handler;
 use proposals::{
@@ -198,6 +198,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .route("/auth/logout", post(logout_handler))
         .route("/auth/verify-email", post(verify_email_handler))
+        .route("/auth/verify-email-link", post(verify_email_link_handler))
         .route(
             "/auth/email-verification-token",
             post(email_verification_token_handler),

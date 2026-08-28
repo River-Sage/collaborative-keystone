@@ -385,21 +385,15 @@ fn build_verification_message(
 ) -> Result<MailMessage, MailError> {
     validate_email_address(from_email)?;
     validate_email_address(to_email)?;
+    let verification_link = build_email_verification_link(web_origin, token);
 
     Ok(MailMessage {
         to_email: to_email.to_string(),
         subject: "Verify your World Keystone account".to_string(),
         text_body: format!(
-            "Your World Keystone verification code is:\n\n{token}\n\nCopy that code and paste it into World Keystone.\n\nThis code expires in 24 hours.\n\nOpen World Keystone: {web_origin}\n\nIf you did not request this, you can ignore this message.",
+            "Verify your World Keystone account:\n\n{verification_link}\n\nIf the link does not work, paste this backup code into World Keystone:\n\n{token}\n\nThis code expires in 24 hours.\n\nIf you did not request this, you can ignore this message.",
         ),
-        html_body: Some(code_email_html(
-            "Verify your World Keystone account",
-            "Your verification code is:",
-            token,
-            "Copy this code and paste it into World Keystone. This code expires in 24 hours.",
-            "Open World Keystone",
-            web_origin,
-        )),
+        html_body: Some(verification_email_html(&verification_link, token)),
     })
 }
 
@@ -540,6 +534,39 @@ fn code_email_html(
         <div style="margin:18px 0;padding:18px;border-radius:10px;background:#f0f7f2;border:1px solid #cfe7d5;text-align:center;font-size:24px;line-height:1.35;font-weight:700;letter-spacing:1px;color:#163b22;font-family:Consolas,Menlo,monospace;">{code}</div>
         <p style="margin:0 0 18px;font-size:15px;line-height:1.6;color:#333;">{note}</p>
         <p style="margin:0 0 18px;"><a href="{link_url}" style="color:#174ea6;text-decoration:none;font-size:15px;font-weight:700;">{link_label}</a></p>
+        <p style="margin:0;font-size:13px;line-height:1.5;color:#777;">If you did not request this, you can ignore this message.</p>
+      </div>
+    </div>
+  </body>
+</html>"#
+    )
+}
+
+fn build_email_verification_link(web_origin: &str, token: &str) -> String {
+    format!(
+        "{}/verify-email#token={}",
+        web_origin.trim_end_matches('/'),
+        token
+    )
+}
+
+fn verification_email_html(verification_link: &str, code: &str) -> String {
+    let title = escape_html("Verify your World Keystone account");
+    let verification_link = escape_html(verification_link);
+    let code = escape_html(code);
+
+    format!(
+        r#"<!doctype html>
+<html>
+  <body style="margin:0;padding:0;background:#f6f7f6;color:#111;font-family:Inter,Arial,sans-serif;">
+    <div style="max-width:560px;margin:0 auto;padding:32px 20px;">
+      <div style="background:#ffffff;border:1px solid #e5e7e5;border-radius:14px;padding:28px;">
+        <h1 style="margin:0 0 16px;font-size:22px;line-height:1.25;font-weight:700;color:#111;">{title}</h1>
+        <p style="margin:0 0 22px;font-size:15px;line-height:1.6;color:#333;">Click the button below to verify your account. You will be taken straight into World Keystone.</p>
+        <p style="margin:0 0 24px;"><a href="{verification_link}" style="display:inline-block;background:#1f5f8b;color:#ffffff;text-decoration:none;font-size:15px;font-weight:700;border-radius:8px;padding:12px 18px;">Verify Email</a></p>
+        <p style="margin:0 0 12px;font-size:14px;line-height:1.6;color:#555;">If the button does not work, paste this backup code into World Keystone:</p>
+        <div style="margin:12px 0 18px;padding:16px;border-radius:10px;background:#f0f7f2;border:1px solid #cfe7d5;text-align:center;font-size:22px;line-height:1.35;font-weight:700;letter-spacing:1px;color:#163b22;font-family:Consolas,Menlo,monospace;">{code}</div>
+        <p style="margin:0 0 18px;font-size:15px;line-height:1.6;color:#333;">This code expires in 24 hours.</p>
         <p style="margin:0;font-size:13px;line-height:1.5;color:#777;">If you did not request this, you can ignore this message.</p>
       </div>
     </div>
@@ -712,15 +739,22 @@ mod tests {
         )
         .expect("verification message should build");
 
+        assert!(
+            message
+                .text_body
+                .contains("https://worldkeystone.com/verify-email#token=abc123CODE")
+        );
         assert!(message.text_body.contains("\n\nabc123CODE\n\n"));
         assert!(!message.text_body.contains("\\n"));
-        assert!(message.text_body.contains("Copy that code"));
+        assert!(message.text_body.contains("paste this backup code"));
         assert!(message.text_body.contains("This code expires in 24 hours"));
         let html = message
             .html_body
             .expect("verification email should include html");
+        assert!(html.contains("Verify Email"));
+        assert!(html.contains("https://worldkeystone.com/verify-email#token=abc123CODE"));
         assert!(html.contains("abc123CODE"));
-        assert!(html.contains("Copy this code"));
+        assert!(html.contains("paste this backup code"));
         assert!(html.contains("This code expires in 24 hours"));
     }
 }
