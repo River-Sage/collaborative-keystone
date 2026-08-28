@@ -5,6 +5,7 @@ use lettre::{
     message::{Mailbox, header::ContentType},
     transport::smtp::{authentication::Credentials, extension::ClientId},
 };
+use serde::Serialize;
 use tracing::info;
 
 const DEFAULT_WEB_ORIGIN: &str = "http://localhost:5173";
@@ -15,11 +16,14 @@ const DEFAULT_SMTP_PORT: u16 = 25;
 const DEFAULT_SMTP_STARTTLS_PORT: u16 = 587;
 const DEFAULT_SMTP_IMPLICIT_TLS_PORT: u16 = 465;
 const DEFAULT_SMTP_TIMEOUT_SECONDS: u64 = 10;
+const DEFAULT_RESEND_API_URL: &str = "https://api.resend.com/emails";
+const DEFAULT_RESEND_TIMEOUT_SECONDS: u64 = 10;
 
 #[derive(Debug, Clone)]
 pub enum Mailer {
     Log(LogMailer),
     Smtp(SmtpMailer),
+    Resend(ResendMailer),
 }
 
 #[derive(Debug, Clone)]
@@ -38,10 +42,28 @@ pub struct SmtpMailer {
 }
 
 #[derive(Debug, Clone)]
+pub struct ResendMailer {
+    from_name: String,
+    from_email: String,
+    web_origin: String,
+    api_key: String,
+    api_url: String,
+    client: reqwest::Client,
+}
+
+#[derive(Debug, Clone)]
 pub struct MailMessage {
     pub to_email: String,
     pub subject: String,
     pub text_body: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ResendEmailRequest {
+    from: String,
+    to: Vec<String>,
+    subject: String,
+    text: String,
 }
 
 #[derive(Debug)]
@@ -132,6 +154,45 @@ impl Mailer {
                     web_origin,
                 }))
             }
+            "resend" | "resend_api" | "resend-api" => {
+                let api_key = env::var("MAIL_RESEND_API_KEY")
+                    .ok()
+                    .or_else(|| env::var("RESEND_API_KEY").ok())
+                    .filter(|value| !value.trim().is_empty())
+                    .ok_or_else(|| {
+                        "MAIL_RESEND_API_KEY or RESEND_API_KEY is required when MAIL_MODE=resend."
+                            .to_string()
+                    })?;
+                let api_url = env::var("MAIL_RESEND_API_URL")
+                    .ok()
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or_else(|| DEFAULT_RESEND_API_URL.to_string());
+                if is_production && !api_url.starts_with("https://") {
+                    return Err("MAIL_RESEND_API_URL must use https:// in production.".to_string());
+                }
+                let timeout_seconds = env::var("MAIL_RESEND_TIMEOUT_SECONDS")
+                    .ok()
+                    .map(|value| {
+                        value.parse::<u64>().map_err(|_| {
+                            "MAIL_RESEND_TIMEOUT_SECONDS must be a positive integer.".to_string()
+                        })
+                    })
+                    .transpose()?
+                    .unwrap_or(DEFAULT_RESEND_TIMEOUT_SECONDS);
+                let client = reqwest::Client::builder()
+                    .timeout(Duration::from_secs(timeout_seconds.max(1)))
+                    .build()
+                    .map_err(|err| format!("failed to build Resend mail client: {err}"))?;
+
+                Ok(Mailer::Resend(ResendMailer {
+                    from_name,
+                    from_email,
+                    web_origin,
+                    api_key,
+                    api_url,
+                    client,
+                }))
+            }
             "smtp" => {
                 let host =
                     env::var("MAIL_SMTP_HOST").unwrap_or_else(|_| DEFAULT_SMTP_HOST.to_string());
@@ -204,7 +265,7 @@ impl Mailer {
                     transport,
                 }))
             }
-            _ => Err("MAIL_MODE must be either log or smtp.".to_string()),
+            _ => Err("MAIL_MODE must be log, smtp, or resend.".to_string()),
         }
     }
 
@@ -218,6 +279,9 @@ impl Mailer {
                 build_verification_message(&config.from_email, &config.web_origin, to_email, token)
             }
             Mailer::Smtp(config) => {
+                build_verification_message(&config.from_email, &config.web_origin, to_email, token)
+            }
+            Mailer::Resend(config) => {
                 build_verification_message(&config.from_email, &config.web_origin, to_email, token)
             }
         }?;
@@ -243,6 +307,12 @@ impl Mailer {
                 to_email,
                 token,
             ),
+            Mailer::Resend(config) => build_password_reset_message(
+                &config.from_email,
+                &config.web_origin,
+                to_email,
+                token,
+            ),
         }?;
 
         self.send(message).await
@@ -262,6 +332,7 @@ impl Mailer {
                 Ok(())
             }
             Mailer::Smtp(config) => config.send(message).await,
+            Mailer::Resend(config) => config.send(message).await,
         }
     }
 }
@@ -274,6 +345,32 @@ impl SmtpMailer {
             .await
             .map(|_| ())
             .map_err(|err| MailError::new(format!("SMTP delivery failed: {err}")))
+    }
+}
+
+impl ResendMailer {
+    async fn send(&self, message: MailMessage) -> Result<(), MailError> {
+        let request = build_resend_request(&self.from_name, &self.from_email, &message)?;
+        let response = self
+            .client
+            .post(&self.api_url)
+            .bearer_auth(&self.api_key)
+            .json(&request)
+            .send()
+            .await
+            .map_err(|err| MailError::new(format!("Resend API request failed: {err}")))?;
+
+        let status = response.status();
+        if status.is_success() {
+            return Ok(());
+        }
+
+        let body = response.text().await.unwrap_or_default();
+        Err(MailError::new(format!(
+            "Resend API returned {}: {}",
+            status,
+            concise_response_body(&body)
+        )))
     }
 }
 
@@ -344,6 +441,23 @@ fn build_smtp_transport(
     Ok(builder.build())
 }
 
+fn build_resend_request(
+    from_name: &str,
+    from_email: &str,
+    message: &MailMessage,
+) -> Result<ResendEmailRequest, MailError> {
+    let subject = sanitize_header_value(&message.subject)?;
+    let from = format_resend_mailbox(from_name, from_email)?;
+    let to_address = parse_mail_address(&message.to_email, "Invalid recipient email address.")?;
+
+    Ok(ResendEmailRequest {
+        from,
+        to: vec![to_address.to_string()],
+        subject,
+        text: message.text_body.clone(),
+    })
+}
+
 fn build_lettre_message(
     from_name: &str,
     from_email: &str,
@@ -366,6 +480,18 @@ fn build_lettre_message(
         .header(ContentType::TEXT_PLAIN)
         .body(message.text_body.clone())
         .map_err(|err| MailError::new(format!("Failed to build email message: {err}")))
+}
+
+fn format_resend_mailbox(name: &str, email: &str) -> Result<String, MailError> {
+    validate_email_address(email)?;
+    let email = sanitize_header_value(email)?;
+    let name = sanitize_header_value(name)?;
+
+    if name.trim().is_empty() {
+        Ok(email)
+    } else {
+        Ok(format!("{name} <{email}>"))
+    }
 }
 
 fn parse_mail_address(value: &str, error_message: &str) -> Result<Address, MailError> {
@@ -410,9 +536,22 @@ fn is_loopback_smtp_host(host: &str) -> bool {
     )
 }
 
+fn concise_response_body(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return "<empty response body>".to_string();
+    }
+
+    const MAX_ERROR_BODY_CHARS: usize = 500;
+    trimmed.chars().take(MAX_ERROR_BODY_CHARS).collect()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{SmtpSecurity, infer_smtp_security, is_loopback_smtp_host, parse_mail_address};
+    use super::{
+        MailMessage, SmtpSecurity, build_resend_request, format_resend_mailbox,
+        infer_smtp_security, is_loopback_smtp_host, parse_mail_address,
+    };
 
     #[test]
     fn smtp_security_accepts_common_provider_terms() {
@@ -466,5 +605,35 @@ mod tests {
     fn mail_address_parsing_rejects_header_injection() {
         assert!(parse_mail_address("person@example.com", "bad").is_ok());
         assert!(parse_mail_address("person@example.com\r\nBcc: other@example.com", "bad").is_err());
+    }
+
+    #[test]
+    fn resend_request_uses_plain_text_and_friendly_sender() {
+        let request = build_resend_request(
+            "World Keystone",
+            "no-reply@worldkeystone.com",
+            &MailMessage {
+                to_email: "person@example.com".to_string(),
+                subject: "Verify your World Keystone account".to_string(),
+                text_body: "Token: abc123".to_string(),
+            },
+        )
+        .expect("resend request should build");
+
+        assert_eq!(request.from, "World Keystone <no-reply@worldkeystone.com>");
+        assert_eq!(request.to, vec!["person@example.com".to_string()]);
+        assert_eq!(request.subject, "Verify your World Keystone account");
+        assert_eq!(request.text, "Token: abc123");
+    }
+
+    #[test]
+    fn resend_mailbox_rejects_header_injection() {
+        assert!(
+            format_resend_mailbox(
+                "World Keystone\r\nBcc: other@example.com",
+                "no-reply@worldkeystone.com"
+            )
+            .is_err()
+        );
     }
 }

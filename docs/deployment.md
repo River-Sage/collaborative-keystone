@@ -79,13 +79,9 @@ API:
 - `WEB_ORIGIN=https://worldkeystone.com`
 - `PUBLIC_WEB_ORIGIN=https://worldkeystone.com`
 - `PUBLIC_API_ORIGIN=https://api.worldkeystone.com`
-- `MAIL_MODE=smtp`
+- `MAIL_MODE=resend`
 - `MAIL_FROM_EMAIL=no-reply@worldkeystone.com`
-- `MAIL_SMTP_HOST=smtp.resend.com`
-- `MAIL_SMTP_PORT=465`
-- `MAIL_SMTP_SECURITY=implicit_tls`
-- `MAIL_SMTP_USERNAME=resend`
-- `MAIL_SMTP_PASSWORD`
+- `MAIL_RESEND_API_KEY`
 - `CF_TURNSTILE_SECRET_KEY`
 
 Web build:
@@ -293,23 +289,25 @@ That keeps the dev-machine move simple, but the database user needs enough migra
 The API has a pluggable mailer:
 
 - `MAIL_MODE=log` logs verification and password reset emails in development instead of sending real inbox messages. In debug/dev mode, the web UI can also receive local-only verification and reset tokens for testing.
+- `MAIL_MODE=resend` sends verification and password reset emails through the Resend HTTPS API.
 - `MAIL_MODE=smtp` sends verification and password reset emails to an SMTP relay.
 
 Production cannot rely on logged tokens. Account verification and password resets require deliverable email.
 
-The API supports secure SMTP submission through `MAIL_SMTP_SECURITY`:
+For the first World Keystone launch on DigitalOcean, prefer Resend's HTTPS API because DigitalOcean blocks outbound SMTP ports `25`, `465`, and `587` on Droplets by default:
+
+- `MAIL_MODE=resend`
+- `MAIL_RESEND_API_KEY=<Resend API key>`
+- `MAIL_RESEND_API_URL=https://api.resend.com/emails`
+- `MAIL_FROM_EMAIL=no-reply@worldkeystone.com`
+
+Resend requires a verified domain before sending from that domain. Add and verify `worldkeystone.com` in Resend, then add the DNS records Resend gives you in Cloudflare.
+
+The API also supports secure SMTP submission through `MAIL_SMTP_SECURITY` for providers/environments where SMTP ports are allowed:
 
 - `implicit_tls`: encrypted SMTP from the first byte, normally port `465`
 - `starttls`: connect first, then require STARTTLS before credentials or mail are sent, normally port `587`
 - `none`: unencrypted SMTP, allowed in production only for a local relay such as `127.0.0.1:25`
-
-For the first World Keystone launch, prefer Resend SMTP:
-
-- `MAIL_SMTP_HOST=smtp.resend.com`
-- `MAIL_SMTP_PORT=465`
-- `MAIL_SMTP_SECURITY=implicit_tls`
-- `MAIL_SMTP_USERNAME=resend`
-- `MAIL_SMTP_PASSWORD=<Resend API key>`
 
 Postmark and similar providers may use `MAIL_SMTP_SECURITY=starttls` on port `587` instead.
 
