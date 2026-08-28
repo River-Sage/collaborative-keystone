@@ -5,12 +5,12 @@ This project is moving toward a first working production prototype. The current 
 ## Recommended Shape
 
 - Web public origin: `https://worldkeystone.com`
-- API public origin: `https://api.worldkeystone.com`
+- API public origin: `https://worldkeystone.com/api`
 - API local bind: `127.0.0.1:8080`
 - Web local service: a static web server serving `site/web/dist`
 - Database: PostgreSQL reachable only from the machine or private network
 
-Keeping the API bound to `127.0.0.1` lets the tunnel expose it without opening the API port directly to the public internet.
+Keeping the API bound to `127.0.0.1` lets nginx proxy same-origin `/api/*` requests to the API without opening the API port directly to the public internet.
 
 Recommended first server:
 
@@ -19,7 +19,7 @@ Recommended first server:
 - local PostgreSQL 17/18 on the same private server
 - Caddy or nginx serving `site/web/dist` on `127.0.0.1`
 - Rust API release binary on `127.0.0.1:8080`
-- Cloudflare Tunnel for `worldkeystone.com` and `api.worldkeystone.com`
+- Cloudflare Tunnel for `worldkeystone.com`, with nginx proxying `/api/*` to the local API
 - daily database backups plus off-server encrypted backup copies
 
 This is enough for an early public launch because the app's hot path is mostly PostgreSQL-backed form submission, queue loading, voting, and indexed lookups. Do not start with Kubernetes, autoscaling, or multi-region databases. Move only when measured load says to move.
@@ -78,7 +78,7 @@ API:
 - `APP_ENV=production`
 - `WEB_ORIGIN=https://worldkeystone.com`
 - `PUBLIC_WEB_ORIGIN=https://worldkeystone.com`
-- `PUBLIC_API_ORIGIN=https://api.worldkeystone.com`
+- `PUBLIC_API_ORIGIN=https://worldkeystone.com/api`
 - `MAIL_MODE=resend`
 - `MAIL_FROM_EMAIL=no-reply@worldkeystone.com`
 - `MAIL_RESEND_API_KEY`
@@ -86,7 +86,7 @@ API:
 
 Web build:
 
-- `VITE_API_BASE_URL=https://api.worldkeystone.com`
+- `VITE_API_BASE_URL=https://worldkeystone.com/api`
 - `VITE_TURNSTILE_SITE_KEY`
 - `VITE_PATREON_URL`
 
@@ -322,7 +322,7 @@ When using a local mail server, that mail server should handle outbound delivery
 The intended tunnel routing is:
 
 - `worldkeystone.com` to the local web service
-- `api.worldkeystone.com` to the local API service
+- nginx proxies `/api/*` from the web service to the local API service, stripping the `/api` prefix before forwarding
 
 Before creating the tunnel, verify the current `cloudflared` commands against Cloudflare's docs. The target architecture above is the important part; exact commands can be confirmed during setup.
 
@@ -335,7 +335,7 @@ After the tunnel is live, run the smoke script from the repository root:
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\smoke-production.ps1 `
   -WebOrigin https://worldkeystone.com `
-  -ApiOrigin https://api.worldkeystone.com `
+  -ApiOrigin https://worldkeystone.com/api `
   -ExpectedLocaleSlug world `
   -ExpectedLocaleName World `
   -ExpectedRegistryStatus canonical
@@ -350,7 +350,7 @@ $env:CK_SMOKE_EMAIL = "smoke@example.com"
 $env:CK_SMOKE_PASSWORD = "use-a-real-smoke-password"
 powershell -ExecutionPolicy Bypass -File scripts\smoke-production.ps1 `
   -WebOrigin https://worldkeystone.com `
-  -ApiOrigin https://api.worldkeystone.com `
+  -ApiOrigin https://worldkeystone.com/api `
   -ExpectedLocaleSlug world `
   -ExpectedLocaleName World `
   -ExpectedRegistryStatus canonical
@@ -360,7 +360,7 @@ The smoke account should be a normal user, not a moderator. The script does not 
 
 ## Pre-Launch Checklist
 
-- Build the web app with the production `VITE_API_BASE_URL`.
+- Build the web app with the production `VITE_API_BASE_URL`, preferably same-origin `/api` for the canonical site.
 - Start the API with `APP_ENV=production`.
 - Confirm `/health` returns `200` through the tunnel.
 - Confirm login cookies include `Secure`.

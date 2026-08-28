@@ -390,13 +390,13 @@ fn build_verification_message(
         to_email: to_email.to_string(),
         subject: "Verify your World Keystone account".to_string(),
         text_body: format!(
-            "Your World Keystone verification code is:\n\n{token}\n\nCopy only that code and paste it into World Keystone.\n\nIt expires in 24 hours.\n\nOpen World Keystone: {web_origin}\n\nIf you did not request this, you can ignore this message.",
+            "Your World Keystone verification code is:\n\n{token}\n\nCopy that code and paste it into World Keystone.\n\nThis code expires in 24 hours.\n\nOpen World Keystone: {web_origin}\n\nIf you did not request this, you can ignore this message.",
         ),
         html_body: Some(code_email_html(
             "Verify your World Keystone account",
             "Your verification code is:",
             token,
-            "Copy only this code and paste it into World Keystone. It expires in 24 hours.",
+            "Copy this code and paste it into World Keystone. This code expires in 24 hours.",
             "Open World Keystone",
             web_origin,
         )),
@@ -416,13 +416,13 @@ fn build_password_reset_message(
         to_email: to_email.to_string(),
         subject: "Reset your World Keystone password".to_string(),
         text_body: format!(
-            "Your World Keystone password reset code is:\n\n{token}\n\nCopy only that code and paste it into World Keystone.\n\nIt expires in 1 hour.\n\nOpen World Keystone: {web_origin}\n\nIf you did not request this, you can ignore this message.",
+            "Your World Keystone password reset code is:\n\n{token}\n\nCopy that code and paste it into World Keystone.\n\nThis code expires in 1 hour.\n\nOpen World Keystone: {web_origin}\n\nIf you did not request this, you can ignore this message.",
         ),
         html_body: Some(code_email_html(
             "Reset your World Keystone password",
             "Your password reset code is:",
             token,
-            "Copy only this code and paste it into World Keystone. It expires in 1 hour.",
+            "Copy this code and paste it into World Keystone. This code expires in 1 hour.",
             "Open World Keystone",
             web_origin,
         )),
@@ -714,11 +714,13 @@ mod tests {
 
         assert!(message.text_body.contains("\n\nabc123CODE\n\n"));
         assert!(!message.text_body.contains("\\n"));
-        assert!(message.text_body.contains("Copy only that code"));
+        assert!(message.text_body.contains("Copy that code"));
+        assert!(message.text_body.contains("This code expires in 24 hours"));
         let html = message
             .html_body
             .expect("verification email should include html");
         assert!(html.contains("abc123CODE"));
-        assert!(html.contains("Copy only this code"));
+        assert!(html.contains("Copy this code"));
+        assert!(html.contains("This code expires in 24 hours"));
     }
 }
