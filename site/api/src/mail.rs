@@ -405,21 +405,15 @@ fn build_password_reset_message(
 ) -> Result<MailMessage, MailError> {
     validate_email_address(from_email)?;
     validate_email_address(to_email)?;
+    let reset_link = build_password_reset_link(web_origin, token);
 
     Ok(MailMessage {
         to_email: to_email.to_string(),
         subject: "Reset your World Keystone password".to_string(),
         text_body: format!(
-            "Your World Keystone password reset code is:\n\n{token}\n\nCopy that code and paste it into World Keystone.\n\nThis code expires in 1 hour.\n\nOpen World Keystone: {web_origin}\n\nIf you did not request this, you can ignore this message.",
+            "Reset your World Keystone password:\n\n{reset_link}\n\nThis link expires in 1 hour.\n\nIf you did not request this, you can ignore this message.",
         ),
-        html_body: Some(code_email_html(
-            "Reset your World Keystone password",
-            "Your password reset code is:",
-            token,
-            "Copy this code and paste it into World Keystone. This code expires in 1 hour.",
-            "Open World Keystone",
-            web_origin,
-        )),
+        html_body: Some(password_reset_email_html(&reset_link)),
     })
 }
 
@@ -508,43 +502,17 @@ fn format_resend_mailbox(name: &str, email: &str) -> Result<String, MailError> {
     }
 }
 
-fn code_email_html(
-    title: &str,
-    intro: &str,
-    code: &str,
-    note: &str,
-    link_label: &str,
-    link_url: &str,
-) -> String {
-    let title = escape_html(title);
-    let intro = escape_html(intro);
-    let code = escape_html(code);
-    let note = escape_html(note);
-    let link_label = escape_html(link_label);
-    let link_url = escape_html(link_url);
-
-    format!(
-        r#"<!doctype html>
-<html>
-  <body style="margin:0;padding:0;background:#f6f7f6;color:#111;font-family:Inter,Arial,sans-serif;">
-    <div style="max-width:560px;margin:0 auto;padding:32px 20px;">
-      <div style="background:#ffffff;border:1px solid #e5e7e5;border-radius:14px;padding:28px;">
-        <h1 style="margin:0 0 16px;font-size:22px;line-height:1.25;font-weight:700;color:#111;">{title}</h1>
-        <p style="margin:0 0 14px;font-size:15px;line-height:1.6;color:#333;">{intro}</p>
-        <div style="margin:18px 0;padding:18px;border-radius:10px;background:#f0f7f2;border:1px solid #cfe7d5;text-align:center;font-size:24px;line-height:1.35;font-weight:700;letter-spacing:1px;color:#163b22;font-family:Consolas,Menlo,monospace;">{code}</div>
-        <p style="margin:0 0 18px;font-size:15px;line-height:1.6;color:#333;">{note}</p>
-        <p style="margin:0 0 18px;"><a href="{link_url}" style="color:#174ea6;text-decoration:none;font-size:15px;font-weight:700;">{link_label}</a></p>
-        <p style="margin:0;font-size:13px;line-height:1.5;color:#777;">If you did not request this, you can ignore this message.</p>
-      </div>
-    </div>
-  </body>
-</html>"#
-    )
-}
-
 fn build_email_verification_link(web_origin: &str, token: &str) -> String {
     format!(
         "{}/verify-email#token={}",
+        web_origin.trim_end_matches('/'),
+        token
+    )
+}
+
+fn build_password_reset_link(web_origin: &str, token: &str) -> String {
+    format!(
+        "{}/reset-password#token={}",
         web_origin.trim_end_matches('/'),
         token
     )
@@ -567,6 +535,28 @@ fn verification_email_html(verification_link: &str, code: &str) -> String {
         <p style="margin:0 0 12px;font-size:14px;line-height:1.6;color:#555;">If the button does not work, paste this backup code into World Keystone:</p>
         <div style="margin:12px 0 18px;padding:16px;border-radius:10px;background:#f0f7f2;border:1px solid #cfe7d5;text-align:center;font-size:22px;line-height:1.35;font-weight:700;letter-spacing:1px;color:#163b22;font-family:Consolas,Menlo,monospace;">{code}</div>
         <p style="margin:0 0 18px;font-size:15px;line-height:1.6;color:#333;">This code expires in 24 hours.</p>
+        <p style="margin:0;font-size:13px;line-height:1.5;color:#777;">If you did not request this, you can ignore this message.</p>
+      </div>
+    </div>
+  </body>
+</html>"#
+    )
+}
+
+fn password_reset_email_html(reset_link: &str) -> String {
+    let title = escape_html("Reset your World Keystone password");
+    let reset_link = escape_html(reset_link);
+
+    format!(
+        r#"<!doctype html>
+<html>
+  <body style="margin:0;padding:0;background:#f6f7f6;color:#111;font-family:Inter,Arial,sans-serif;">
+    <div style="max-width:560px;margin:0 auto;padding:32px 20px;">
+      <div style="background:#ffffff;border:1px solid #e5e7e5;border-radius:14px;padding:28px;">
+        <h1 style="margin:0 0 16px;font-size:22px;line-height:1.25;font-weight:700;color:#111;">{title}</h1>
+        <p style="margin:0 0 22px;font-size:15px;line-height:1.6;color:#333;">Click the button below to choose a new password.</p>
+        <p style="margin:0 0 24px;"><a href="{reset_link}" style="display:inline-block;background:#1f5f8b;color:#ffffff;text-decoration:none;font-size:15px;font-weight:700;border-radius:8px;padding:12px 18px;">Reset Password</a></p>
+        <p style="margin:0 0 18px;font-size:15px;line-height:1.6;color:#333;">This link expires in 1 hour.</p>
         <p style="margin:0;font-size:13px;line-height:1.5;color:#777;">If you did not request this, you can ignore this message.</p>
       </div>
     </div>
@@ -639,8 +629,9 @@ fn concise_response_body(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        MailMessage, SmtpSecurity, build_resend_request, build_verification_message,
-        format_resend_mailbox, infer_smtp_security, is_loopback_smtp_host, parse_mail_address,
+        MailMessage, SmtpSecurity, build_password_reset_message, build_resend_request,
+        build_verification_message, format_resend_mailbox, infer_smtp_security,
+        is_loopback_smtp_host, parse_mail_address,
     };
 
     #[test]
@@ -756,5 +747,36 @@ mod tests {
         assert!(html.contains("abc123CODE"));
         assert!(html.contains("paste this backup code"));
         assert!(html.contains("This code expires in 24 hours"));
+    }
+
+    #[test]
+    fn password_reset_message_uses_link_flow() {
+        let message = build_password_reset_message(
+            "no-reply@worldkeystone.com",
+            "https://worldkeystone.com",
+            "person@example.com",
+            "reset123CODE",
+        )
+        .expect("password reset message should build");
+
+        assert!(
+            message
+                .text_body
+                .contains("https://worldkeystone.com/reset-password#token=reset123CODE")
+        );
+        assert!(!message.text_body.contains("\\n"));
+        assert!(
+            !message
+                .text_body
+                .contains("Your World Keystone password reset code is")
+        );
+        assert!(!message.text_body.contains("Copy this code"));
+        assert!(message.text_body.contains("This link expires in 1 hour"));
+        let html = message
+            .html_body
+            .expect("password reset email should include html");
+        assert!(html.contains("Reset Password"));
+        assert!(html.contains("https://worldkeystone.com/reset-password#token=reset123CODE"));
+        assert!(html.contains("This link expires in 1 hour"));
     }
 }

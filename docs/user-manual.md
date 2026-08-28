@@ -10,6 +10,8 @@ Collaborative Keystone runs in UTC calendar-month cycles. During an active cycle
 4. If required reviews are waiting, review the proposal shown and cast a real sentiment vote.
 5. After review unlock, submit, vote, or signal duplicates on active proposals. New submissions show a preview before you confirm.
 
+If you forget your password, use Forgot Password from the login screen. Keystone sends a reset link that opens a page with two password fields: New Password and Confirm New Password.
+
 ## Main Tabs
 
 ### Issues

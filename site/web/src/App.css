@@ -213,6 +213,28 @@ button:hover {
   color: #223241;
 }
 
+.auth-flow-heading {
+  display: grid;
+  gap: 8px;
+  width: min(100%, 360px);
+  margin: 18px auto 20px;
+  text-align: center;
+}
+
+.auth-flow-heading h2 {
+  margin: 0;
+  color: #223241;
+  font-size: 1.35rem;
+  font-weight: 300;
+  letter-spacing: 0;
+}
+
+.auth-flow-heading p {
+  margin: 0;
+  color: #6f8293;
+  line-height: 1.45;
+}
+
 .auth-form {
   display: grid;
   gap: 16px;

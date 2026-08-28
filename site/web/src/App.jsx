@@ -497,6 +497,30 @@ function clearEmailVerificationLinkUrl() {
   }
 }
 
+function getPasswordResetLinkToken() {
+  try {
+    const url = new URL(window.location.href);
+    const path = url.pathname.replace(/\/$/, "");
+    if (path !== "/reset-password") return "";
+
+    const hashToken = new URLSearchParams(url.hash.replace(/^#/, "")).get("token");
+    return (hashToken || url.searchParams.get("token") || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+function clearPasswordResetLinkUrl() {
+  try {
+    const url = new URL(window.location.href);
+    if (url.pathname.replace(/\/$/, "") !== "/reset-password") return;
+
+    window.history.replaceState({}, document.title, "/");
+  } catch {
+    // History can be unavailable in restricted browser modes.
+  }
+}
+
 function App() {
   const [me, setMe] = useState(null);
   const [sessionChecked, setSessionChecked] = useState(false);
@@ -519,6 +543,7 @@ function App() {
   const [passwordResetToken, setPasswordResetToken] = useState("");
   const [passwordResetNewPassword, setPasswordResetNewPassword] = useState("");
   const [passwordResetConfirmPassword, setPasswordResetConfirmPassword] = useState("");
+  const [passwordResetLinkMode, setPasswordResetLinkMode] = useState(false);
   const [turnstileToken, setTurnstileToken] = useState("");
   const [turnstileStatus, setTurnstileStatus] = useState("idle");
   const [turnstileWidgetResetKey, setTurnstileWidgetResetKey] = useState(0);
@@ -708,6 +733,28 @@ function App() {
   }
 
   async function initializeSession() {
+    const passwordResetLinkToken = getPasswordResetLinkToken();
+    if (passwordResetLinkToken) {
+      clearPasswordResetLinkUrl();
+      setMe(null);
+      setAuthMode("resetConfirm");
+      setPasswordResetToken(passwordResetLinkToken);
+      setPasswordResetLinkMode(true);
+      setAuthError("");
+      setAuthSuccess("");
+      setSessionChecked(true);
+      return;
+    }
+
+    if (window.location.pathname.replace(/\/$/, "") === "/reset-password") {
+      clearPasswordResetLinkUrl();
+      setMe(null);
+      setAuthMode("resetRequest");
+      setAuthError("That reset link is missing its code. Request a new password reset email.");
+      setSessionChecked(true);
+      return;
+    }
+
     const emailVerificationLinkToken = getEmailVerificationLinkToken();
     if (emailVerificationLinkToken) {
       try {
@@ -998,6 +1045,7 @@ function App() {
     setPasswordResetToken("");
     setPasswordResetNewPassword("");
     setPasswordResetConfirmPassword("");
+    setPasswordResetLinkMode(false);
     setTurnstileToken("");
     setTurnstileStatus("idle");
     setTurnstileWidgetResetKey((current) => current + 1);
@@ -1293,18 +1341,24 @@ function App() {
         if (resetData.dev_reset_token) {
           setPasswordResetToken(resetData.dev_reset_token);
           setAuthMode("resetConfirm");
+          setPasswordResetLinkMode(false);
           setAuthSuccess("Reset token generated for this prototype.");
         } else {
-          setAuthSuccess("If that account exists, reset instructions were sent.");
+          setAuthSuccess("If that account exists, a password reset link was sent.");
         }
       } else if (authMode === "resetConfirm") {
+        if (!passwordResetToken.trim()) {
+          setAuthError("Password reset code is required.");
+          return;
+        }
         await api.confirmPasswordReset(passwordResetToken, passwordResetNewPassword);
         setPassword("");
         setPasswordResetToken("");
         setPasswordResetNewPassword("");
         setPasswordResetConfirmPassword("");
+        setPasswordResetLinkMode(false);
         setAuthMode("login");
-        setAuthSuccess("Password reset. Log in with your new password.");
+        setAuthSuccess("Password updated. Log in with your new password.");
       }
 
       setSessionChecked(true);
@@ -4109,6 +4163,21 @@ function App() {
   const authTurnstileMessage = authNeedsTurnstile
     ? turnstileStatusMessage(turnstileStatus)
     : "";
+  const authModeIsPrimary = authMode === "login" || authMode === "register";
+  const authFlowTitle =
+    authMode === "resetRequest"
+      ? "Reset Password"
+      : authMode === "resetConfirm"
+        ? "Create New Password"
+        : "";
+  const authFlowCopy =
+    authMode === "resetRequest"
+      ? "Enter your email and we will send you a password reset link."
+      : authMode === "resetConfirm" && passwordResetLinkMode
+        ? "Choose a new password for your World Keystone account."
+        : authMode === "resetConfirm"
+          ? "Enter the password reset code from your email."
+          : "";
 
   if (!me) {
     return (
@@ -4116,22 +4185,29 @@ function App() {
         <div className="auth-card">
           <h1>{brandName}</h1>
 
-          <div className="auth-toggle">
-            <button
-              className={authMode === "login" ? "active" : ""}
-              onClick={() => switchAuthMode("login")}
-              type="button"
-            >
-              Login
-            </button>
-            <button
-              className={authMode === "register" ? "active" : ""}
-              onClick={() => switchAuthMode("register")}
-              type="button"
-            >
-              Register
-            </button>
-          </div>
+          {authModeIsPrimary ? (
+            <div className="auth-toggle">
+              <button
+                className={authMode === "login" ? "active" : ""}
+                onClick={() => switchAuthMode("login")}
+                type="button"
+              >
+                Login
+              </button>
+              <button
+                className={authMode === "register" ? "active" : ""}
+                onClick={() => switchAuthMode("register")}
+                type="button"
+              >
+                Register
+              </button>
+            </div>
+          ) : (
+            <div className="auth-flow-heading">
+              <h2>{authFlowTitle}</h2>
+              <p>{authFlowCopy}</p>
+            </div>
+          )}
 
           <form onSubmit={handleAuthSubmit} className="auth-form">
             {authMode !== "resetConfirm" ? (
@@ -4175,15 +4251,17 @@ function App() {
 
             {authMode === "resetConfirm" ? (
               <>
-                <label>
-                  Reset Token
-                  <input
-                    value={passwordResetToken}
-                    onChange={(event) => setPasswordResetToken(event.target.value)}
-                    maxLength={MAX_TOKEN_CHARS}
-                    required
-                  />
-                </label>
+                {!passwordResetLinkMode ? (
+                  <label>
+                    Password Reset Code
+                    <input
+                      value={passwordResetToken}
+                      onChange={(event) => setPasswordResetToken(event.target.value)}
+                      maxLength={MAX_TOKEN_CHARS}
+                      required
+                    />
+                  </label>
+                ) : null}
 
                 <label>
                   New Password
@@ -4238,8 +4316,8 @@ function App() {
                   : authMode === "register"
                     ? "Register"
                     : authMode === "resetRequest"
-                      ? "Send Reset Instructions"
-                      : "Reset Password"}
+                      ? "Send Reset Link"
+                      : "Save New Password"}
             </button>
 
             <div className="auth-secondary-actions">
@@ -4256,7 +4334,7 @@ function App() {
                   type="button"
                   onClick={() => switchAuthMode("resetConfirm")}
                 >
-                  I have a reset token
+                  I have a password reset code
                 </button>
               ) : null}
               {authMode === "resetConfirm" ? (
@@ -4264,7 +4342,7 @@ function App() {
                   type="button"
                   onClick={() => switchAuthMode("resetRequest")}
                 >
-                  Request reset
+                  Send New Link
                 </button>
               ) : null}
               {authMode === "resetRequest" || authMode === "resetConfirm" ? (

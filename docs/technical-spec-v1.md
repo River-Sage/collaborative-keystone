@@ -358,6 +358,8 @@ A signed-in account with an unverified email must be gated to email verification
 
 Verification emails should prioritize a one-click verification link that opens the app, verifies the email with the expiring token, creates a normal session, and removes the token from the visible URL after use. A copy-paste verification code may remain available as a fallback for mail clients or browsers that do not open the link cleanly.
 
+Password reset emails should prioritize a one-click reset link that opens a dedicated reset password page. The normal reset-link page should show only new password and confirm password fields before saving the new password. Reset tokens must remain long, random, single-use, hashed at rest, short-lived, and removed from the visible URL after the page reads them.
+
 After email verification succeeds, the user should be routed into the required-review pool when required reviews are waiting. If no required reviews are waiting, the user may proceed to the normal verified app flow.
 
 A newly created account must still satisfy the cycle review unlock rules before submitting or voting in a cycle.

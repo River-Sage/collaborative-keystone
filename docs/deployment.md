@@ -313,7 +313,7 @@ Postmark and similar providers may use `MAIL_SMTP_SECURITY=starttls` on port `58
 
 For a no-third-party production path, run a local mail transfer agent on the server and point the API at it with `MAIL_SMTP_HOST=127.0.0.1`, `MAIL_SMTP_PORT=25`, and `MAIL_SMTP_SECURITY=none`.
 
-For public launch, verify SPF, DKIM, and DMARC for the sending domain and complete a real registration, one-click email verification link, fallback verification code, and password-reset test from the live domain before inviting users.
+For public launch, verify SPF, DKIM, and DMARC for the sending domain and complete a real registration, one-click email verification link, fallback verification code, and one-click password reset link test from the live domain before inviting users.
 
 When using a local mail server, that mail server should handle outbound delivery, queueing, TLS to receiving mail servers, DKIM signing, bounce handling, and reputation. When using a hosted SMTP provider, that provider normally handles those delivery concerns after the API submits the message securely. DNS still needs SPF, DKIM, and DMARC for the sending domain.
 
