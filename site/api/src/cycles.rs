@@ -3,20 +3,27 @@ use sqlx::{PgPool, Row};
 use tracing::info;
 use uuid::Uuid;
 
+use crate::locale::{self, LocaleConfig};
+
 const CYCLE_DAYS: i64 = 30;
 
-pub async fn ensure_active_world_cycle(db: &PgPool) -> Result<Option<Uuid>, sqlx::Error> {
+pub async fn ensure_active_locale_cycle(
+    db: &PgPool,
+    locale_config: &LocaleConfig,
+) -> Result<Option<Uuid>, sqlx::Error> {
+    let locale_id = locale::ensure_configured_locale(db, locale_config).await?;
+
     let active_exists: bool = sqlx::query(
         r#"
         SELECT EXISTS (
             SELECT 1
-            FROM cycles c
-            JOIN locales l ON l.id = c.locale_id
-            WHERE l.slug = 'world'
-              AND c.is_active = TRUE
+            FROM cycles
+            WHERE locale_id = $1
+              AND is_active = TRUE
         ) AS active_exists
         "#,
     )
+    .bind(locale_id)
     .fetch_one(db)
     .await?
     .try_get("active_exists")?;
@@ -27,18 +34,10 @@ pub async fn ensure_active_world_cycle(db: &PgPool) -> Result<Option<Uuid>, sqlx
 
     let mut tx = db.begin().await?;
 
-    let locale_id: Uuid = sqlx::query(
-        r#"
-        SELECT id
-        FROM locales
-        WHERE slug = 'world'
-        LIMIT 1
-        FOR UPDATE
-        "#,
-    )
-    .fetch_one(&mut *tx)
-    .await?
-    .try_get("id")?;
+    sqlx::query("SELECT id FROM locales WHERE id = $1 FOR UPDATE")
+        .bind(locale_id)
+        .fetch_one(&mut *tx)
+        .await?;
 
     let active_exists_in_tx: bool = sqlx::query(
         r#"
@@ -82,14 +81,18 @@ pub async fn ensure_active_world_cycle(db: &PgPool) -> Result<Option<Uuid>, sqlx
     .await?;
 
     tx.commit().await?;
-    info!("opened initial world cycle {}", new_cycle_id);
+    info!(
+        "opened initial {} cycle {}",
+        locale_config.slug, new_cycle_id
+    );
 
     Ok(Some(new_cycle_id))
 }
 
-pub async fn open_next_world_cycle_after_resolution(
+pub async fn open_next_locale_cycle_after_resolution(
     db: &PgPool,
     resolved_cycle_id: Uuid,
+    locale_slug: &str,
 ) -> Result<Uuid, sqlx::Error> {
     let mut tx = db.begin().await?;
 
@@ -102,13 +105,14 @@ pub async fn open_next_world_cycle_after_resolution(
         FROM cycles c
         JOIN locales l ON l.id = c.locale_id
         WHERE c.id = $1
-          AND l.slug = 'world'
+          AND l.slug = $2
           AND c.is_active = TRUE
         LIMIT 1
         FOR UPDATE
         "#,
     )
     .bind(resolved_cycle_id)
+    .bind(locale_slug)
     .fetch_one(&mut *tx)
     .await?;
 
@@ -157,8 +161,8 @@ pub async fn open_next_world_cycle_after_resolution(
     let next_cycle_id: Uuid = row.try_get("id")?;
     tx.commit().await?;
     info!(
-        "opened world cycle {} after resolving cycle {}",
-        next_cycle_id, resolved_cycle_id
+        "opened {} cycle {} after resolving cycle {}",
+        locale_slug, next_cycle_id, resolved_cycle_id
     );
 
     Ok(next_cycle_id)

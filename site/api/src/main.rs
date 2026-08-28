@@ -1,4 +1,4 @@
-use std::{env, net::SocketAddr, sync::Arc};
+use std::{env, net::SocketAddr, path::PathBuf, sync::Arc};
 
 use axum::{
     Router,
@@ -17,6 +17,8 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use anti_abuse::{anti_abuse_review_queue_handler, resolve_anti_abuse_flag_handler};
 use appeals::{appeal_review_queue_handler, resolve_appeal_handler, submit_appeal_handler};
+use bootstrap::first_moderator_bootstrap_handler;
+use comments::{create_comment_handler, list_comments_handler, vote_comment_handler};
 use executions::{
     create_execution_record_handler, get_execution_record_handler, list_execution_records_handler,
     update_execution_record_handler,
@@ -30,15 +32,19 @@ use reconsiderations::{
 mod anti_abuse;
 mod appeals;
 mod auth;
+mod bootstrap;
+mod comments;
 mod csrf;
 mod cycles;
 mod error;
 mod executions;
+mod locale;
 mod mail;
 mod merge_notes;
 mod my_queue;
 mod notifications;
 mod proposals;
+mod provenance;
 mod rate_limit;
 mod reconsiderations;
 mod review_actions;
@@ -57,12 +63,14 @@ use proposals::{
     published_cycle_results_handler, resolve_current_cycle_outcomes_handler, review_pool_handler,
     review_queue_handler,
 };
+use provenance::{build_provenance_handler, locale_registry_handler, source_info_handler};
 use review_actions::{submit_review_action_handler, unlock_status_handler};
 use votes::{cast_merge_vote_handler, cast_sentiment_vote_handler};
 
 #[derive(Clone)]
 pub struct AppState {
     pub db: PgPool,
+    pub locale: locale::LocaleConfig,
     pub mailer: mail::Mailer,
     pub rate_limiter: rate_limit::RateLimiter,
 }
@@ -97,6 +105,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| "8080".to_string())
         .parse()
         .expect("PORT must be a valid integer");
+    let locale = locale::initialize_from_env()
+        .map_err(|err| format!("locale configuration error: {err}"))?;
     let mailer = mail::Mailer::from_env(is_production_environment())
         .map_err(|err| format!("mail configuration error: {err}"))?;
 
@@ -105,13 +115,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .connect(&database_url)
         .await?;
 
-    sqlx::migrate!("../db/migrations").run(&db).await?;
+    let migrations = sqlx::migrate::Migrator::new(migrations_path().as_path()).await?;
+    migrations.run(&db).await?;
     sqlx::query("SELECT 1").execute(&db).await?;
-    cycles::ensure_active_world_cycle(&db).await?;
+    cycles::ensure_active_locale_cycle(&db, &locale).await?;
     auth::seed_development_accounts(&db).await;
 
     let state = Arc::new(AppState {
         db,
+        locale,
         mailer,
         rate_limiter: rate_limit::RateLimiter::new(),
     });
@@ -156,12 +168,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .route("/cycle-results", get(published_cycle_results_handler))
         .route("/health", get(health))
+        .route("/source-info", get(source_info_handler))
+        .route(
+            "/.well-known/keystone-build.json",
+            get(build_provenance_handler),
+        )
+        .route(
+            "/.well-known/keystone-locales.json",
+            get(locale_registry_handler),
+        )
         .route("/execution-records", get(list_execution_records_handler))
         .route(
             "/execution-records/{id}",
             get(get_execution_record_handler).post(update_execution_record_handler),
         )
         .route("/auth/register", post(register_handler))
+        .route(
+            "/bootstrap/first-moderator",
+            post(first_moderator_bootstrap_handler),
+        )
         .route("/auth/login", post(login_handler))
         .route(
             "/auth/password-reset/request",
@@ -183,6 +208,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             post(create_proposal_handler).get(list_proposals_handler),
         )
         .route("/proposals/{id}", get(get_proposal_handler))
+        .route(
+            "/proposals/{id}/comments",
+            get(list_comments_handler).post(create_comment_handler),
+        )
+        .route(
+            "/proposals/{proposal_id}/comments/{comment_id}/vote",
+            post(vote_comment_handler),
+        )
         .route("/proposals/{id}/appeal", post(submit_appeal_handler))
         .route(
             "/proposals/{id}/reconsideration/start",
@@ -284,4 +317,10 @@ fn is_production_environment() -> bool {
     }
 
     false
+}
+
+fn migrations_path() -> PathBuf {
+    env::var("CK_MIGRATIONS_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("../db/migrations"))
 }

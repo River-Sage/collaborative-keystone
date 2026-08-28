@@ -6,7 +6,7 @@ These commands are for the local development database only. They assume this che
 C:\Dev\Sites\collaborative-keystone\collaborative-keystone
 ```
 
-The helper reads `DATABASE_URL` from `site\api\.env` unless `$env:DATABASE_URL` is already set. It uses your local `psql.exe`, then calls the existing Rust demo seeder where appropriate.
+The helper reads `DATABASE_URL` from `site\api\.env` unless `$env:DATABASE_URL` is already set. It also follows `CK_LOCALE_SLUG` and `CK_LOCALE_NAME`, defaulting to `world` / `World` when unset. It uses your local `psql.exe`, then calls the existing Rust demo seeder where appropriate.
 
 ## GUI Test Suite
 
@@ -74,6 +74,8 @@ Stage-CkRealisticEnvironment
 ```
 
 This is for browsing and product testing, not baseline seed sanity. Run `Reset-CkDatabaseFull` before `Test-CkSeedRequirements`.
+
+`Stage-CkRealisticEnvironment` resets dev account login state. Browser-stored tutorial dismissal flags are not directly cleared by PowerShell, but the app treats reset dev accounts as first-login users, so the welcome tutorial and post-review handoff tutorial should appear again after login.
 
 ## Quick Status
 
@@ -157,6 +159,23 @@ Set-CkCyclePhase -Phase closed
 ```
 
 Use `closed` when testing moderator cycle outcome resolution. Use `active` afterward to return to normal proposal, review, and voting testing.
+
+## No Prior Winner / No Solution Target Scenario
+
+Creates a clean active configured-locale cycle with no prior published issue winner and no active proposals. This is useful for testing first-cycle behavior: the Issue Board is open, but the Solution Board has no valid target yet.
+
+```powershell
+Reset-CkNoPriorWinnerScenario
+```
+
+## Low-Participation No-Winner Scenario
+
+Starts from the no-prior-winner scenario, then inserts two low-participation issue proposals with one support vote each. When the cycle is closed and resolved, the Issue Board should publish `no_ranked_winner`, the Solution Board should have no winner, and the next cycle should still have no solution target.
+
+```powershell
+New-CkLowParticipationNoWinnerScenario
+Set-CkCyclePhase -Phase closed
+```
 
 ## Moderation Reset
 

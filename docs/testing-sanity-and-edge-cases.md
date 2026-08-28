@@ -19,9 +19,9 @@ python .\scripts\dev_db_test_gui.py --sanity
 
 Expected baseline:
 
-- one active `world` locale
+- one active configured locale, defaulting to `world` when `CK_LOCALE_SLUG` is unset
 - active `issue`, `solution`, and `archive` boards
-- one active World cycle
+- one active configured-locale cycle
 - dev accounts are verified and role-correct
 - dev accounts have no sessions, auth tokens, reviews, sentiment votes, or duplicate-link votes
 - four active demo issues, one archived prior issue winner, and four active demo solutions
@@ -41,8 +41,11 @@ Expected baseline:
 Expected active-cycle behavior:
 
 - public proposal lists and details do not expose live vote totals
-- active public users should not see live support ratios, unsafe fractions, merge percentages, or internal watch labels
+- unauthenticated guests cannot access proposal lists, proposal details, published results, implementation records, or merge relationships
+- unauthenticated guests can access login, registration, health, source/license, build-provenance, and locale-registry metadata surfaces
+- authenticated active-cycle users should not see live support ratios, unsafe fractions, merge percentages, or internal watch labels
 - moderators may see only the threshold count signal that triggered a moderator review state
+- normal API responses should not expose raw user UUIDs for authors, moderators, reviewers, or the currently logged-in account
 - cycle outcome/result views may expose final counts after resolution
 - required-review cards must collect a real sentiment vote without displaying live totals to ordinary users
 
@@ -88,12 +91,17 @@ Closed phase:
 - submissions and voting are closed
 - moderator outcome resolution can be tested
 - after resolution, remaining active proposals should archive as cycle history and the next cycle should open fresh active boards
+- if issue candidates do not meet the ranked threshold, the issue result should be `no_ranked_winner`
+- if there is no prior published issue winner, the solution board should have no target, accept no solution submissions, and resolve as `no_solution_target`
+- a no-winner issue cycle with no earlier published issue winner should leave the next cycle in the same no-solution-target state
 
 Useful commands:
 
 ```powershell
 Set-CkCyclePhase -Phase active
 Set-CkCyclePhase -Phase closed
+Reset-CkNoPriorWinnerScenario
+New-CkLowParticipationNoWinnerScenario
 ```
 
 ## Duplicate-Link And Merge Scenarios
@@ -150,6 +158,8 @@ Expected after moderation reset:
 - active watch flags are gone
 - moderator actions are gone
 - demo proposals return to active/archived baseline states
+
+Moderator archive reasons accepted by the API are `duplicate`, `unsafe_illegal_deceptive`, `spam_abuse`, `irrelevant`, `minimum_quality`, `superseded`, `moderation`, `manual_archive`, and `not_a_fit`. System lifecycle reasons `merged` and `cycle_closed` remain audit-visible but are not ordinary moderator dropdown choices.
 
 ## Trust Review And Anti-Abuse
 

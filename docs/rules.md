@@ -9,6 +9,7 @@
 - the first cycle is issue-only until a winning issue is published
 - after that, the solution board works on the most recent published winning issue from a prior cycle
 - the solution board shows the target winning issue at the top so users can inspect the problem being solved
+- live vote totals are hidden during the month; published results remain visible and auditable after closeout
 
 ## Proposal Requirements
 
@@ -19,6 +20,8 @@ Must be:
 - specific
 - relevant to the locale
 - meaningfully distinct from existing proposals
+
+When locale names appear in user-facing issue prompts, `World` should read as `the World`. Other locales use their normal display name.
 
 ### Solutions
 Must be:
@@ -36,9 +39,11 @@ To submit a proposal in a cycle:
 To unlock voting in a cycle:
 - complete up to 4 required review actions, depending on how many eligible reviewable submissions currently exist
 
-Each required review action is a real sentiment review: the user must choose Support, Not a Fit, Unclear, or Unsafe / Illegal / Deceptive for the reviewed proposal. On the Issue Board, the Not a Fit choice may be displayed as Pass while keeping the same stored vote value. A bare "mark reviewed" action does not satisfy the process.
+Each required review action is a real sentiment review: the user must choose Support, Not a Fit, Unclear, or Unsafe / Illegal / Deceptive for the reviewed proposal. On the Issue Board, the Not a Fit choice may be displayed as Downvote while keeping the same stored vote value. A bare "mark reviewed" action does not satisfy the process.
 
 Required reviews are shown one at a time, with the least-exposed eligible submission first. If too few submissions meet the normal review-pool rules, the system falls back to the least-exposed active submissions.
+
+Required review progress should be shown as the current review number, starting at 1. When fewer than 4 reviews are required, show that smaller available count and how many remain after the current review.
 
 The normal Issue and Solution board feeds use the same review-priority ordering in repeating sets: low-exposure, contested/under-reviewed, merge-heavy, and low-rated-but-salvageable candidates, then fallback by least exposure.
 
@@ -51,7 +56,7 @@ Required review credit cannot be earned on proposals authored by the reviewing u
 Each user may cast one sentiment vote per proposal:
 
 - Support
-- Not a Fit, displayed as Pass on the Issue Board
+- Not a Fit, displayed as Downvote on the Issue Board
 - Unclear
 - Unsafe / Illegal / Deceptive
 
@@ -69,9 +74,21 @@ When a merge is executed, the lower total-count proposal merges into the higher 
 
 Distinction notes require an active merge relationship and may be submitted only after the source proposal receives enough duplicate signals.
 
+## Discussion
+
+- discussion belongs to individual submissions, not separate board-wide forums
+- each user may post one comment per submission
+- authors may comment on their own submissions, labeled only as Author
+- comments never expose emails, raw user IDs, public user IDs, usernames, or profiles
+- each new comment starts with a like from its author
+- users may like or dislike comments, but comment vote counts and ratios are hidden
+- comments are sorted by hidden like-to-dislike ratio
+- comment votes affect only comment ordering, not proposal ranking or outcomes
+- archived submissions keep historical comments visible but do not accept new comments or comment votes in v1
+
 ## Live Vote Visibility
 
-During active cycles, public users do not see live vote totals or ratios.
+During active cycles, authenticated users do not see live vote totals or ratios. Guest browsing of proposal, result, implementation, archive, and merge-relationship content is disabled for now.
 
 ## Moderation
 

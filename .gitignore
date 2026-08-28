@@ -13,6 +13,7 @@ logs/
 # Rust build output
 target/
 target-codex/
+**/target-codex-*/
 
 # Node/Vite build output
 node_modules/

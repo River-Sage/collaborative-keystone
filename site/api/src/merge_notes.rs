@@ -26,7 +26,6 @@ pub struct MergeDistinctionNoteResponse {
     pub ok: bool,
     pub source_proposal_id: Uuid,
     pub target_proposal_id: Uuid,
-    pub author_user_id: Uuid,
     pub difference_type: String,
     pub note_text: String,
 }
@@ -41,7 +40,6 @@ pub struct MergeRelationshipResponse {
 
 #[derive(Debug, Serialize)]
 pub struct MergeRelationshipNote {
-    pub author_user_id: Uuid,
     pub difference_type: String,
     pub note_text: String,
     pub created_at: String,
@@ -101,11 +99,14 @@ pub async fn upsert_merge_distinction_note_handler(
             p.merge_count
         FROM proposals p
         JOIN boards b ON b.id = p.board_id
+        JOIN locales l ON l.id = p.locale_id
         WHERE p.id = $1
+          AND l.slug = $2
         LIMIT 1
         "#,
     )
     .bind(source_proposal_id)
+    .bind(&state.locale.slug)
     .fetch_optional(&state.db)
     .await
     .map_err(|err| {
@@ -173,11 +174,14 @@ pub async fn upsert_merge_distinction_note_handler(
         SELECT p.cycle_id, p.locale_id, p.primary_state, b.code AS board_code
         FROM proposals p
         JOIN boards b ON b.id = p.board_id
+        JOIN locales l ON l.id = p.locale_id
         WHERE p.id = $1
+          AND l.slug = $2
         LIMIT 1
         "#,
     )
     .bind(payload.target_proposal_id)
+    .bind(&state.locale.slug)
     .fetch_optional(&state.db)
     .await
     .map_err(|err| {
@@ -226,7 +230,6 @@ pub async fn upsert_merge_distinction_note_handler(
         INSERT INTO merge_distinction_notes (
             source_proposal_id,
             target_proposal_id,
-            author_user_id,
             difference_type,
             note_text
         )
@@ -262,7 +265,6 @@ pub async fn upsert_merge_distinction_note_handler(
             ok: true,
             source_proposal_id: row.try_get("source_proposal_id").map_err(internal_db_err)?,
             target_proposal_id: row.try_get("target_proposal_id").map_err(internal_db_err)?,
-            author_user_id: row.try_get("author_user_id").map_err(internal_db_err)?,
             difference_type: row.try_get("difference_type").map_err(internal_db_err)?,
             note_text: row.try_get("note_text").map_err(internal_db_err)?,
         }),
@@ -271,28 +273,32 @@ pub async fn upsert_merge_distinction_note_handler(
 
 pub async fn get_merge_relationship_handler(
     State(state): State<Arc<AppState>>,
+    _auth_user: AuthUser,
     Path((source_proposal_id, target_proposal_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<MergeRelationshipResponse>, AppError> {
     let row = sqlx::query(
         r#"
         SELECT
-            n.author_user_id,
             n.difference_type,
             n.note_text,
             n.created_at,
             n.updated_at
         FROM proposal_merge_relationships r
+        JOIN proposals sp ON sp.id = r.source_proposal_id
+        JOIN locales l ON l.id = sp.locale_id
         LEFT JOIN merge_distinction_notes n
             ON n.source_proposal_id = r.source_proposal_id
            AND n.target_proposal_id = r.target_proposal_id
         WHERE r.source_proposal_id = $1
           AND r.target_proposal_id = $2
           AND r.status = 'active'
+          AND l.slug = $3
         LIMIT 1
         "#,
     )
     .bind(source_proposal_id)
     .bind(target_proposal_id)
+    .bind(&state.locale.slug)
     .fetch_optional(&state.db)
     .await
     .map_err(|err| {
@@ -349,7 +355,6 @@ fn map_note(row: sqlx::postgres::PgRow) -> Result<Option<MergeRelationshipNote>,
     };
 
     Ok(Some(MergeRelationshipNote {
-        author_user_id: row.try_get("author_user_id").map_err(internal_db_err)?,
         difference_type: row.try_get("difference_type").map_err(internal_db_err)?,
         note_text,
         created_at: row

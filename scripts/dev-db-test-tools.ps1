@@ -23,6 +23,60 @@ function Get-CkDatabaseUrl {
     return ($line -replace '^\s*DATABASE_URL\s*=\s*', '').Trim().Trim('"').Trim("'")
 }
 
+function Get-CkEnvValue {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+        [string]$DefaultValue = ""
+    )
+
+    $envValue = [Environment]::GetEnvironmentVariable($Name)
+    if (-not [string]::IsNullOrWhiteSpace($envValue)) {
+        return $envValue.Trim()
+    }
+
+    if (Test-Path $EnvPath) {
+        $pattern = "^\s*$([regex]::Escape($Name))\s*="
+        $line = Get-Content $EnvPath | Where-Object { $_ -match $pattern } | Select-Object -First 1
+        if ($line) {
+            return ($line -replace $pattern, "").Trim().Trim('"').Trim("'")
+        }
+    }
+
+    return $DefaultValue
+}
+
+function Get-CkLocaleSlug {
+    $value = Get-CkEnvValue -Name "CK_LOCALE_SLUG" -DefaultValue "world"
+    return $value.Trim()
+}
+
+function Get-CkLocaleName {
+    $value = Get-CkEnvValue -Name "CK_LOCALE_NAME" -DefaultValue "World"
+    return $value.Trim()
+}
+
+function ConvertTo-CkSqlLiteral {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Value
+    )
+
+    return "'" + $Value.Replace("'", "''") + "'"
+}
+
+function Resolve-CkConfiguredLocaleSql {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Sql
+    )
+
+    $localeSlugLiteral = ConvertTo-CkSqlLiteral (Get-CkLocaleSlug)
+    $localeNameLiteral = ConvertTo-CkSqlLiteral (Get-CkLocaleName)
+
+    return $Sql.Replace("'world'", $localeSlugLiteral).Replace("'World'", $localeNameLiteral)
+}
+
 function Get-CkPsql {
     $knownPath = "C:\Program Files\PostgreSQL\18\bin\psql.exe"
     if (Test-Path $knownPath) {
@@ -52,7 +106,8 @@ function Invoke-CkSql {
     $databaseUrl = Get-CkDatabaseUrl
     $tmp = Join-Path $RepoRoot ".ck-dev-sql-$(Get-Random).sql"
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($tmp, $Sql, $utf8NoBom)
+    $resolvedSql = Resolve-CkConfiguredLocaleSql $Sql
+    [System.IO.File]::WriteAllText($tmp, $resolvedSql, $utf8NoBom)
 
     try {
         & $psql $databaseUrl -v ON_ERROR_STOP=1 -f $tmp
@@ -65,6 +120,9 @@ function Invoke-CkSql {
 }
 
 function Invoke-CkDemoSeeder {
+    $env:CK_LOCALE_SLUG = Get-CkLocaleSlug
+    $env:CK_LOCALE_NAME = Get-CkLocaleName
+
     Push-Location $ApiDir
     try {
         cargo run --bin seed_demo
@@ -138,7 +196,7 @@ SET
           OR (
             (counts.support_count + counts.not_a_fit_count + counts.unclear_count + counts.unsafe_count + counts.merge_count) > 0
             AND counts.unsafe_count::numeric
-                / (counts.support_count + counts.not_a_fit_count + counts.unclear_count + counts.unsafe_count + counts.merge_count)::numeric >= 0.35
+                / (counts.support_count + counts.not_a_fit_count + counts.unclear_count + counts.unsafe_count + counts.merge_count)::numeric >= 0.50
           )
         THEN COALESCE(p.high_moderation_watch_started_at, NOW())
         ELSE NULL
@@ -647,9 +705,12 @@ TRUNCATE TABLE
     proposal_watch_flags,
     merge_distinction_notes,
     proposal_merge_relationships,
+    proposal_comment_votes,
+    proposal_comments,
     proposal_merge_votes,
     proposal_sentiment_votes,
     review_actions,
+    review_unlocks,
     proposals,
     cycles,
     sessions,
@@ -678,6 +739,205 @@ COMMIT;
     Invoke-CkDemoSeeder
 
     Show-CkSeedSummary
+}
+
+function Reset-CkNoPriorWinnerScenario {
+    Write-Host "Ensuring migrations are applied with the Rust demo seeder..."
+    Invoke-CkDemoSeeder
+
+    $sql = @'
+BEGIN;
+
+TRUNCATE TABLE
+    anti_abuse_flags,
+    user_activity_events,
+    notification_events,
+    cycle_results,
+    execution_records,
+    proposal_merge_vote_reconciliations,
+    reconsideration_windows,
+    appeals,
+    moderator_actions,
+    proposal_watch_flags,
+    merge_distinction_notes,
+    proposal_merge_relationships,
+    proposal_comment_votes,
+    proposal_comments,
+    proposal_merge_votes,
+    proposal_sentiment_votes,
+    review_actions,
+    review_unlocks,
+    proposals,
+    cycles,
+    sessions,
+    email_verification_tokens,
+    password_reset_tokens
+CASCADE;
+
+INSERT INTO locales (slug, name, is_active)
+VALUES ('world', 'World', TRUE)
+ON CONFLICT (slug)
+DO UPDATE SET name = EXCLUDED.name, is_active = TRUE;
+
+INSERT INTO boards (code, name, is_active)
+VALUES
+    ('issue', 'Issue Board', TRUE),
+    ('solution', 'Solution Board', TRUE),
+    ('archive', 'Archive Board', TRUE)
+ON CONFLICT (code)
+DO UPDATE SET name = EXCLUDED.name, is_active = TRUE;
+
+INSERT INTO cycles (
+    locale_id,
+    cycle_number,
+    starts_at,
+    submission_ends_at,
+    voting_ends_at,
+    is_active
+)
+SELECT
+    id,
+    1,
+    NOW() - INTERVAL '1 day',
+    NOW() + INTERVAL '29 days',
+    NOW() + INTERVAL '29 days',
+    TRUE
+FROM locales
+WHERE slug = 'world';
+
+COMMIT;
+'@
+
+    Invoke-CkSql $sql
+    Reset-CkDevAccounts
+    Show-CkNoWinnerScenarioSummary
+}
+
+function New-CkLowParticipationNoWinnerScenario {
+    Reset-CkNoPriorWinnerScenario
+
+    $sql = @'
+BEGIN;
+
+WITH active_cycle AS (
+    SELECT c.id AS cycle_id, c.locale_id
+    FROM cycles c
+    JOIN locales l ON l.id = c.locale_id
+    WHERE l.slug = 'world'
+      AND c.is_active = TRUE
+    LIMIT 1
+),
+issue_board AS (
+    SELECT id AS board_id
+    FROM boards
+    WHERE code = 'issue'
+),
+authors AS (
+    SELECT
+        email,
+        id,
+        ROW_NUMBER() OVER (ORDER BY email) AS rn
+    FROM users
+    WHERE email IN ('test2@example.com', 'user@example.com')
+),
+inserted AS (
+    INSERT INTO proposals (
+        board_id,
+        cycle_id,
+        locale_id,
+        author_user_id,
+        title,
+        problem_description,
+        affected_scope,
+        why_it_matters,
+        support_count,
+        created_at
+    )
+    SELECT
+        issue_board.board_id,
+        active_cycle.cycle_id,
+        active_cycle.locale_id,
+        authors.id,
+        'SCENARIO LOW PARTICIPATION: Issue ' || authors.rn,
+        'Low-participation issue candidate ' || authors.rn || '.',
+        'World',
+        'Verifies that very small cycles close without producing a ranked winner.',
+        1,
+        NOW() + (authors.rn || ' seconds')::interval
+    FROM active_cycle, issue_board, authors
+    RETURNING id, author_user_id
+),
+cross_votes AS (
+    SELECT
+        inserted.id AS proposal_id,
+        authors.id AS voter_id
+    FROM inserted
+    JOIN authors ON authors.id <> inserted.author_user_id
+)
+INSERT INTO proposal_sentiment_votes (proposal_id, user_id, vote_value)
+SELECT proposal_id, voter_id, 'support'
+FROM cross_votes;
+
+COMMIT;
+'@
+
+    Invoke-CkSql $sql
+    Show-CkNoWinnerScenarioSummary
+}
+
+function Show-CkNoWinnerScenarioSummary {
+    $sql = @'
+WITH active_cycle AS (
+    SELECT c.id, c.locale_id, c.cycle_number
+    FROM cycles c
+    JOIN locales l ON l.id = c.locale_id
+    WHERE l.slug = 'world'
+      AND c.is_active = TRUE
+    LIMIT 1
+),
+latest_issue_winner AS (
+    SELECT cr.winning_proposal_id
+    FROM cycle_results cr
+    JOIN cycles c ON c.id = cr.cycle_id
+    JOIN active_cycle ac ON ac.locale_id = cr.locale_id
+    WHERE cr.board_code = 'issue'
+      AND cr.result_status = 'resolved'
+      AND cr.winning_proposal_id IS NOT NULL
+      AND cr.published_at IS NOT NULL
+      AND c.cycle_number < ac.cycle_number
+    ORDER BY c.cycle_number DESC, cr.published_at DESC
+    LIMIT 1
+)
+SELECT
+    ac.cycle_number,
+    (SELECT COUNT(*) FROM proposals p WHERE p.cycle_id = ac.id) AS active_cycle_proposals,
+    (SELECT COUNT(*) FROM latest_issue_winner) AS solution_target_count
+FROM active_cycle ac;
+
+WITH active_cycle AS (
+    SELECT c.id
+    FROM cycles c
+    JOIN locales l ON l.id = c.locale_id
+    WHERE l.slug = 'world'
+      AND c.is_active = TRUE
+    LIMIT 1
+)
+SELECT
+    b.code AS board,
+    p.title,
+    p.primary_state,
+    p.support_count,
+    p.not_a_fit_count,
+    p.unclear_count,
+    p.unsafe_count,
+    p.merge_count
+FROM proposals p
+JOIN boards b ON b.id = p.board_id
+JOIN active_cycle ac ON ac.id = p.cycle_id
+ORDER BY b.code, p.created_at;
+'@
+
+    Invoke-CkSql $sql
 }
 
 function Stage-CkRealisticEnvironment {
@@ -963,6 +1223,7 @@ COMMIT;
 
     Invoke-CkSql $sql
     Write-Host "Staged a realistic local environment. Titles no longer use DEMO prefixes; use Reset-CkDatabaseFull before baseline sanity checks."
+    Write-Host "Dev account login state was reset; browser tutorial dismissal flags are local, but first-login app state will show tutorials again after login."
     Show-CkSeedSummary
 }
 
@@ -1109,25 +1370,34 @@ BEGIN;
 DELETE FROM review_actions
 WHERE user_id = (SELECT id FROM users WHERE email = '$safeEmail');
 
+DELETE FROM review_unlocks
+WHERE user_id = (SELECT id FROM users WHERE email = '$safeEmail');
+
 DELETE FROM proposal_merge_votes
 WHERE user_id = (SELECT id FROM users WHERE email = '$safeEmail');
 
 DELETE FROM proposal_sentiment_votes
 WHERE user_id = (SELECT id FROM users WHERE email = '$safeEmail');
 
+DELETE FROM proposal_comment_votes
+WHERE user_id = (SELECT id FROM users WHERE email = '$safeEmail');
+
+DELETE FROM proposal_comments
+WHERE author_user_id = (SELECT id FROM users WHERE email = '$safeEmail');
+
 DELETE FROM anti_abuse_flags
 WHERE user_id = (SELECT id FROM users WHERE email = '$safeEmail');
 
 DELETE FROM user_activity_events
 WHERE user_id = (SELECT id FROM users WHERE email = '$safeEmail')
-  AND event_type IN ('review_action', 'sentiment_vote', 'merge_vote', 'proposal_created');
+  AND event_type IN ('review_action', 'sentiment_vote', 'merge_vote', 'proposal_created', 'proposal_comment_created', 'proposal_comment_vote');
 
 $refresh
 
 COMMIT;
 "@
     Invoke-CkSql $sql
-    Write-Host "Cleared reviews, sentiment votes, and merge votes for $Email."
+    Write-Host "Cleared reviews, votes, and comments for $Email."
 }
 
 function Reset-CkUserLoginState {
@@ -1778,7 +2048,7 @@ high_moderation_watch AS (
         OR (
             (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count) > 0
             AND p.unsafe_count::numeric
-                / (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count)::numeric >= 0.35
+                / (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count)::numeric >= 0.50
         )
       )
 ),
@@ -1887,7 +2157,7 @@ eligible_reviews AS (
       AND (
         (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count) = 0
         OR p.unsafe_count::numeric
-            / (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count)::numeric < 0.35
+            / (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count)::numeric < 0.50
       )
       AND NOT EXISTS (
         SELECT 1
@@ -1901,9 +2171,9 @@ eligible_reviews AS (
 INSERT INTO _ck_sanity_assertions (sort_order, requirement, status, detail)
 SELECT
     10,
-    'World locale is active and singular',
+    'Configured locale is active and singular',
     CASE WHEN (SELECT COUNT(*) FROM locales WHERE slug = 'world' AND is_active = TRUE) = 1 THEN 'PASS' ELSE 'FAIL' END,
-    'active_world_count=' || (SELECT COUNT(*) FROM locales WHERE slug = 'world' AND is_active = TRUE)
+    'active_configured_locale_count=' || (SELECT COUNT(*) FROM locales WHERE slug = 'world' AND is_active = TRUE)
 UNION ALL
 SELECT
     20,
@@ -1913,9 +2183,9 @@ SELECT
 UNION ALL
 SELECT
     30,
-    'Exactly one active World cycle exists',
+    'Exactly one active configured-locale cycle exists',
     CASE WHEN (SELECT COUNT(*) FROM cycles c JOIN locales l ON l.id = c.locale_id WHERE l.slug = 'world' AND c.is_active = TRUE) = 1 THEN 'PASS' ELSE 'FAIL' END,
-    'active_world_cycle_count=' || (SELECT COUNT(*) FROM cycles c JOIN locales l ON l.id = c.locale_id WHERE l.slug = 'world' AND c.is_active = TRUE)
+    'active_configured_locale_cycle_count=' || (SELECT COUNT(*) FROM cycles c JOIN locales l ON l.id = c.locale_id WHERE l.slug = 'world' AND c.is_active = TRUE)
 UNION ALL
 SELECT
     40,

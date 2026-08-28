@@ -12,7 +12,7 @@ use sqlx::Row;
 use tracing::error;
 use uuid::Uuid;
 
-use crate::{AppState, auth::AuthUser, error::AppError};
+use crate::{AppState, auth::AuthUser, error::AppError, locale};
 
 const MAX_NOTE_CHARS: usize = 2000;
 
@@ -43,7 +43,6 @@ pub struct ReconsiderationQueueItem {
     pub reconsideration_id: Uuid,
     pub proposal_id: Uuid,
     pub proposal_title: String,
-    pub author_user_id: Uuid,
     pub primary_state: String,
     pub start_reason: String,
     pub start_note: Option<String>,
@@ -124,12 +123,13 @@ pub async fn start_reconsideration_handler(
         JOIN cycles c ON c.id = p.cycle_id
         JOIN locales l ON l.id = p.locale_id
         WHERE p.id = $1
-          AND l.slug = 'world'
+          AND l.slug = $2
           AND c.is_active = TRUE
         LIMIT 1
         "#,
     )
     .bind(proposal_id)
+    .bind(&state.locale.slug)
     .fetch_optional(&state.db)
     .await
     .map_err(|err| {
@@ -151,9 +151,12 @@ pub async fn start_reconsideration_handler(
     let last_archive_moderator_user_id: Option<Uuid> = proposal
         .try_get("last_archive_moderator_user_id")
         .map_err(internal_db_err)?;
-    if last_archive_moderator_user_id == Some(auth_user.user_id) {
+    let alternate_moderator_available =
+        another_verified_moderator_available(&state.db, auth_user.user_id).await?;
+    if last_archive_moderator_user_id == Some(auth_user.user_id) && alternate_moderator_available {
         return Err(AppError::Forbidden(
-            "A different moderator must start reconsideration.".to_string(),
+            "A different moderator must start reconsideration when another moderator is available."
+                .to_string(),
         ));
     }
 
@@ -296,7 +299,6 @@ pub async fn reconsideration_review_queue_handler(
             r.id AS reconsideration_id,
             r.proposal_id,
             p.title AS proposal_title,
-            p.author_user_id,
             p.primary_state,
             r.start_reason,
             r.start_note,
@@ -311,19 +313,20 @@ pub async fn reconsideration_review_queue_handler(
         JOIN locales l ON l.id = p.locale_id
         WHERE r.status = 'open'
           AND c.is_active = TRUE
-          AND l.slug = 'world'
+          AND l.slug = $1
           AND r.ends_at <= NOW()
           AND (
             p.unsafe_count >= 8
             OR (
                 (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count) > 0
                 AND p.unsafe_count::numeric
-                    / (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count)::numeric >= 0.35
+                    / (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count)::numeric >= 0.50
             )
           )
         ORDER BY review_due DESC, r.ends_at ASC
         "#,
     )
+    .bind(&state.locale.slug)
     .fetch_all(&state.db)
     .await
     .map_err(|err| {
@@ -389,17 +392,20 @@ pub async fn resolve_reconsideration_handler(
                 OR (
                     (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count) > 0
                     AND p.unsafe_count::numeric
-                        / (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count)::numeric >= 0.35
+                        / (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count)::numeric >= 0.50
                 )
             ) AS still_high_moderation_watch,
             p.primary_state
         FROM reconsideration_windows r
         JOIN proposals p ON p.id = r.proposal_id
+        JOIN locales l ON l.id = p.locale_id
         WHERE r.id = $1
+          AND l.slug = $2
         LIMIT 1
         "#,
     )
     .bind(reconsideration_id)
+    .bind(&state.locale.slug)
     .fetch_optional(&state.db)
     .await
     .map_err(|err| {
@@ -657,6 +663,7 @@ pub async fn resolve_reconsideration_handler(
 }
 
 pub async fn resolve_cleared_reconsiderations(db: &sqlx::PgPool) -> Result<(), AppError> {
+    let locale_slug = locale::configured_locale_slug();
     let rows = sqlx::query(
         r#"
         SELECT
@@ -674,18 +681,19 @@ pub async fn resolve_cleared_reconsiderations(db: &sqlx::PgPool) -> Result<(), A
         WHERE r.status = 'open'
           AND r.ends_at <= NOW()
           AND c.is_active = TRUE
-          AND l.slug = 'world'
+          AND l.slug = $1
           AND COALESCE(r.previous_archived_reason, '') NOT IN ('merged', 'cycle_closed')
           AND NOT (
             p.unsafe_count >= 8
             OR (
                 (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count) > 0
                 AND p.unsafe_count::numeric
-                    / (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count)::numeric >= 0.35
+                    / (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count)::numeric >= 0.50
             )
           )
         "#,
     )
+    .bind(&locale_slug)
     .fetch_all(db)
     .await
     .map_err(|err| {
@@ -809,7 +817,6 @@ fn map_reconsideration_queue_row(
         reconsideration_id: row.try_get("reconsideration_id").map_err(internal_db_err)?,
         proposal_id: row.try_get("proposal_id").map_err(internal_db_err)?,
         proposal_title: row.try_get("proposal_title").map_err(internal_db_err)?,
-        author_user_id: row.try_get("author_user_id").map_err(internal_db_err)?,
         primary_state: row.try_get("primary_state").map_err(internal_db_err)?,
         start_reason: row.try_get("start_reason").map_err(internal_db_err)?,
         start_note: row.try_get("start_note").map_err(internal_db_err)?,
@@ -866,6 +873,32 @@ fn require_moderator(auth_user: &AuthUser) -> Result<(), AppError> {
             "Moderator privileges are required for this action.".to_string(),
         ))
     }
+}
+
+async fn another_verified_moderator_available(
+    db: &sqlx::PgPool,
+    current_user_id: Uuid,
+) -> Result<bool, AppError> {
+    let row = sqlx::query(
+        r#"
+        SELECT EXISTS (
+            SELECT 1
+            FROM users
+            WHERE id <> $1
+              AND role_code = 'moderator'
+              AND email_verified = TRUE
+        ) AS available
+        "#,
+    )
+    .bind(current_user_id)
+    .fetch_one(db)
+    .await
+    .map_err(|err| {
+        error!("database error checking alternate moderator: {}", err);
+        AppError::Internal("Failed to start reconsideration.".to_string())
+    })?;
+
+    row.try_get("available").map_err(internal_db_err)
 }
 
 async fn insert_moderator_action(

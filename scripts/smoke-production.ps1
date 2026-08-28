@@ -4,6 +4,9 @@ param(
     [string]$WebOrigin = $env:CK_WEB_ORIGIN,
     [string]$Email = $env:CK_SMOKE_EMAIL,
     [string]$Password = $env:CK_SMOKE_PASSWORD,
+    [string]$ExpectedLocaleSlug = $env:CK_EXPECTED_LOCALE_SLUG,
+    [string]$ExpectedLocaleName = $env:CK_EXPECTED_LOCALE_NAME,
+    [string]$ExpectedRegistryStatus = $env:CK_EXPECTED_REGISTRY_STATUS,
     [switch]$SkipLogin,
     [switch]$SkipOversizedBody
 )
@@ -161,6 +164,42 @@ $healthResponse = Invoke-SmokeRequest -Uri "$ApiOrigin/health"
 Assert-Smoke ($healthResponse.StatusCode -eq 200) "API health returned HTTP $($healthResponse.StatusCode)."
 Assert-Smoke ($healthResponse.Content.Trim() -eq "ok") "API health body should be 'ok'."
 Write-Pass "API /health returned 200 ok."
+
+Write-Step "Public source and provenance metadata respond"
+$sourceInfoResponse = Invoke-SmokeRequest -Uri "$ApiOrigin/source-info"
+Assert-Smoke ($sourceInfoResponse.StatusCode -eq 200) "API /source-info returned HTTP $($sourceInfoResponse.StatusCode)."
+$sourceInfo = $sourceInfoResponse.Content | ConvertFrom-Json
+Assert-Smoke ($sourceInfo.ok -eq $true) "/source-info did not return ok=true."
+Assert-Smoke (-not [string]::IsNullOrWhiteSpace([string]$sourceInfo.source_repository_url)) "/source-info did not include source_repository_url."
+Assert-Smoke (-not [string]::IsNullOrWhiteSpace([string]$sourceInfo.license.name)) "/source-info did not include license.name."
+Assert-Smoke ($sourceInfo.registry_manifest_path -eq "/.well-known/keystone-locales.json") "/source-info did not advertise the locale registry manifest path."
+
+$provenanceResponse = Invoke-SmokeRequest -Uri "$ApiOrigin/.well-known/keystone-build.json"
+Assert-Smoke ($provenanceResponse.StatusCode -eq 200) "API /.well-known/keystone-build.json returned HTTP $($provenanceResponse.StatusCode)."
+$provenance = $provenanceResponse.Content | ConvertFrom-Json
+Assert-Smoke ($provenance.schema_version -eq "keystone-build-provenance/v1") "Build provenance schema_version was '$($provenance.schema_version)'."
+Assert-Smoke (-not [string]::IsNullOrWhiteSpace([string]$provenance.source_repository_url)) "Build provenance did not include source_repository_url."
+Assert-Smoke (-not [string]::IsNullOrWhiteSpace([string]$provenance.signature_status)) "Build provenance did not include signature_status."
+if (-not [string]::IsNullOrWhiteSpace($ExpectedLocaleSlug)) {
+    Assert-Smoke ($provenance.locale.slug -eq $ExpectedLocaleSlug) "Build provenance locale slug was '$($provenance.locale.slug)', expected '$ExpectedLocaleSlug'."
+}
+if (-not [string]::IsNullOrWhiteSpace($ExpectedLocaleName)) {
+    Assert-Smoke ($provenance.locale.name -eq $ExpectedLocaleName) "Build provenance locale name was '$($provenance.locale.name)', expected '$ExpectedLocaleName'."
+}
+if (-not [string]::IsNullOrWhiteSpace($ExpectedRegistryStatus)) {
+    Assert-Smoke ($provenance.registry_status -eq $ExpectedRegistryStatus) "Build provenance registry status was '$($provenance.registry_status)', expected '$ExpectedRegistryStatus'."
+}
+
+$registryResponse = Invoke-SmokeRequest -Uri "$ApiOrigin/.well-known/keystone-locales.json"
+Assert-Smoke ($registryResponse.StatusCode -eq 200) "API /.well-known/keystone-locales.json returned HTTP $($registryResponse.StatusCode)."
+$registry = $registryResponse.Content | ConvertFrom-Json
+Assert-Smoke ($registry.schema_version -eq "keystone-locale-registry/v1") "Locale registry schema_version was '$($registry.schema_version)'."
+Assert-Smoke ($registry.entries.Count -ge 1) "Locale registry did not include any entries."
+Assert-Smoke (-not [string]::IsNullOrWhiteSpace([string]$registry.entries[0].registry_status)) "Locale registry entry did not include registry_status."
+if (-not [string]::IsNullOrWhiteSpace($ExpectedLocaleSlug)) {
+    Assert-Smoke ($registry.generated_for.slug -eq $ExpectedLocaleSlug) "Locale registry generated_for slug was '$($registry.generated_for.slug)', expected '$ExpectedLocaleSlug'."
+}
+Write-Pass "Source, provenance, and registry metadata returned expected public fields."
 
 Write-Step "CORS preflight allows the configured web origin"
 $preflightHeaders = @{

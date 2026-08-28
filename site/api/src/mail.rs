@@ -10,8 +10,8 @@ use tracing::info;
 use uuid::Uuid;
 
 const DEFAULT_WEB_ORIGIN: &str = "http://localhost:5173";
-const DEFAULT_FROM_NAME: &str = "Collaborative Keystone";
-const DEFAULT_FROM_EMAIL: &str = "no-reply@collaborativekeystone.com";
+const DEFAULT_FROM_NAME: &str = "World Keystone";
+const DEFAULT_FROM_EMAIL: &str = "no-reply@worldkeystone.com";
 const DEFAULT_SMTP_HOST: &str = "127.0.0.1";
 const DEFAULT_SMTP_PORT: u16 = 25;
 const DEFAULT_SMTP_TIMEOUT_SECONDS: u64 = 10;
@@ -325,9 +325,9 @@ fn build_verification_message(
 
     Ok(MailMessage {
         to_email: to_email.to_string(),
-        subject: "Verify your Collaborative Keystone account".to_string(),
+        subject: "Verify your World Keystone account".to_string(),
         text_body: format!(
-            "Your Collaborative Keystone verification token is:\n\n{token}\n\nIt expires in 24 hours.\n\nOpen {web_origin} and paste this token into the email verification form.\n\nIf you did not request this, you can ignore this message.",
+            "Your World Keystone verification token is:\n\n{token}\n\nIt expires in 24 hours.\n\nOpen {web_origin} and paste this token into the email verification form.\n\nIf you did not request this, you can ignore this message.",
         ),
     })
 }
@@ -343,9 +343,9 @@ fn build_password_reset_message(
 
     Ok(MailMessage {
         to_email: to_email.to_string(),
-        subject: "Reset your Collaborative Keystone password".to_string(),
+        subject: "Reset your World Keystone password".to_string(),
         text_body: format!(
-            "Your Collaborative Keystone password reset token is:\n\n{token}\n\nIt expires in 1 hour.\n\nOpen {web_origin} and paste this token into the password reset form.\n\nIf you did not request this, you can ignore this message.",
+            "Your World Keystone password reset token is:\n\n{token}\n\nIt expires in 1 hour.\n\nOpen {web_origin} and paste this token into the password reset form.\n\nIf you did not request this, you can ignore this message.",
         ),
     })
 }

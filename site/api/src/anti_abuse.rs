@@ -44,7 +44,6 @@ pub struct AntiAbuseResolveResponse {
 #[derive(Debug, Serialize)]
 pub struct AntiAbuseFlagSummary {
     pub id: Uuid,
-    pub user_public_id: Option<String>,
     pub flag_code: String,
     pub severity: String,
     pub status: String,
@@ -52,12 +51,9 @@ pub struct AntiAbuseFlagSummary {
     pub proposal_title: Option<String>,
     pub related_proposal_id: Option<Uuid>,
     pub related_proposal_title: Option<String>,
-    pub client_ip_hint: Option<String>,
-    pub user_agent_hash: Option<String>,
     pub details: Value,
     pub created_at: DateTime<Utc>,
     pub reviewed_at: Option<DateTime<Utc>>,
-    pub reviewed_by_moderator_user_id: Option<Uuid>,
     pub resolution_note: Option<String>,
 }
 
@@ -133,10 +129,6 @@ pub async fn anti_abuse_review_queue_handler(
         r#"
         SELECT
             f.id,
-            CASE
-                WHEN f.user_id IS NULL THEN NULL
-                ELSE 'user-' || LEFT(REPLACE(f.user_id::text, '-', ''), 10)
-            END AS user_public_id,
             f.flag_code,
             f.severity,
             f.status,
@@ -144,12 +136,9 @@ pub async fn anti_abuse_review_queue_handler(
             p.title AS proposal_title,
             f.related_proposal_id,
             rp.title AS related_proposal_title,
-            f.client_ip_hint,
-            f.user_agent_hash,
             f.details,
             f.created_at,
             f.reviewed_at,
-            f.reviewed_by_moderator_user_id,
             f.resolution_note
         FROM anti_abuse_flags f
         LEFT JOIN proposals p ON p.id = f.proposal_id
@@ -659,7 +648,6 @@ fn is_low_value_client_hint(value: &str) -> bool {
 fn map_flag_row(row: sqlx::postgres::PgRow) -> Result<AntiAbuseFlagSummary, AppError> {
     Ok(AntiAbuseFlagSummary {
         id: row.try_get("id").map_err(internal_db_err)?,
-        user_public_id: row.try_get("user_public_id").map_err(internal_db_err)?,
         flag_code: row.try_get("flag_code").map_err(internal_db_err)?,
         severity: row.try_get("severity").map_err(internal_db_err)?,
         status: row.try_get("status").map_err(internal_db_err)?,
@@ -671,14 +659,9 @@ fn map_flag_row(row: sqlx::postgres::PgRow) -> Result<AntiAbuseFlagSummary, AppE
         related_proposal_title: row
             .try_get("related_proposal_title")
             .map_err(internal_db_err)?,
-        client_ip_hint: row.try_get("client_ip_hint").map_err(internal_db_err)?,
-        user_agent_hash: row.try_get("user_agent_hash").map_err(internal_db_err)?,
         details: row.try_get("details").map_err(internal_db_err)?,
         created_at: row.try_get("created_at").map_err(internal_db_err)?,
         reviewed_at: row.try_get("reviewed_at").map_err(internal_db_err)?,
-        reviewed_by_moderator_user_id: row
-            .try_get("reviewed_by_moderator_user_id")
-            .map_err(internal_db_err)?,
         resolution_note: row.try_get("resolution_note").map_err(internal_db_err)?,
     })
 }

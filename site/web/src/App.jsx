@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import "./App.css";
 
@@ -12,26 +12,33 @@ const TABS = [
   { key: "appeals", label: "Appeals", moderatorOnly: true },
   { key: "reconsiderations", label: "Reconsideration", moderatorOnly: true },
   { key: "archive", label: "Archive" },
-  { key: "account", label: "Account" },
+  { key: "account", label: "Settings" },
 ];
 
 const INTRO_STORAGE_KEY = "ck_intro_dismissed_v1";
+const POST_REVIEW_TUTORIAL_STORAGE_KEY = "ck_post_review_handoff_done_v1";
+const POST_REVIEW_TUTORIAL_STEPS = {
+  REAL_SUBMISSIONS: "real_submissions",
+  UNLIMITED_VOTING: "unlimited_voting",
+  PICK_SUBMISSION: "pick_submission",
+  DETAILS_OPENED: "details_opened",
+};
 const INTRO_ITEMS = [
   {
     title: "Issues",
-    body: "Name and review the problems the current World cycle should prioritize.",
+    body: "Name and vote on issues.",
   },
   {
     title: "Solutions",
-    body: "Work on solutions for the most recent published winning issue.",
+    body: "Create and vote on solutions.",
   },
   {
     title: "Implementations",
-    body: "Track winning solutions after they move from proposal to real-world follow-through.",
+    body: "Track and participate in winning solutions.",
   },
   {
     title: "Archive",
-    body: "Read historical proposals, copy cycle history into new submissions, and use eligible appeal paths.",
+    body: "Review archived issues, solutions and implementations.",
   },
   {
     title: "Moderator Tools",
@@ -40,9 +47,31 @@ const INTRO_ITEMS = [
   },
 ];
 
+const TUTORIAL_STEPS = [
+  {
+    title: "Issues",
+    body: "Each month, the Issues board asks what matters most right now. Submit your issue, review what other people submitted, and vote on the biggest issue in {locale}.",
+    highlightTab: "issues",
+  },
+  {
+    title: "Solutions",
+    body: "When the month ends, the top issue is published and moves to the Solutions board.",
+    highlightTab: "solutions",
+  },
+  {
+    title: "Implementations",
+    body: "Solutions are also voted upon, and the highest rated solution moves to the Implementations board.",
+    highlightTab: "implementations",
+  },
+  {
+    title: "Implementation tracking",
+    body: "The Implementations board tracks the implementation until it is completed.",
+    highlightTab: "implementations",
+  },
+];
+
 const PRIMARY_NAV_TAB_KEYS = new Set(["issues", "solutions"]);
 const MODERATOR_ROLES = new Set(["moderator"]);
-const STANDARD_REQUIRED_REVIEW_COUNT = 4;
 const REQUIRED_REVIEW_DISPLAY_LIMIT = 1;
 const MAX_COMPLETION_CRITERIA = 8;
 const MAX_RESOURCE_REQUIREMENTS = 64;
@@ -59,8 +88,10 @@ const MAX_EMAIL_CHARS = 254;
 const MAX_PASSWORD_CHARS = 128;
 const MAX_TOKEN_CHARS = 128;
 const MAX_SEARCH_CHARS = 200;
+const MAX_COMMENT_CHARS = 1000;
 const SUBMISSION_ID_CHARS = 36;
-const SHOW_PROTOTYPE_ACCOUNTS = import.meta.env.DEV;
+const SHOW_PROTOTYPE_ACCOUNTS =
+  import.meta.env.VITE_SHOW_PROTOTYPE_ACCOUNTS === "true";
 const PROTOTYPE_PASSWORD = SHOW_PROTOTYPE_ACCOUNTS
   ? "SuperSecurePass123"
   : "";
@@ -73,12 +104,35 @@ const PROTOTYPE_ACCOUNTS = SHOW_PROTOTYPE_ACCOUNTS ? [
   },
 ] : [];
 const DEFAULT_AUTH_EMAIL = SHOW_PROTOTYPE_ACCOUNTS ? "user@example.com" : "";
+const FEED_ADVANCE_CLOSE_MS = 540;
+const FEED_ADVANCE_HIGHLIGHT_MS = 2160;
+const DEFAULT_LOCALE_NAME = "World";
+const DEFAULT_SOURCE_REPOSITORY_URL =
+  "https://github.com/River-Sage/collaborative-keystone";
+const AGPL_LICENSE_URL = "https://www.gnu.org/licenses/agpl-3.0.en.html";
+const TURNSTILE_SITE_KEY = (import.meta.env.VITE_TURNSTILE_SITE_KEY || "").trim();
+const WORLD_PATREON_URL = "https://patreon.com/worldkeystone";
+const CONFIGURED_PATREON_URL = (import.meta.env.VITE_PATREON_URL || "").trim();
+const CONFIGURED_PATREON_LABEL = (
+  import.meta.env.VITE_PATREON_LABEL || ""
+).trim();
+const TURNSTILE_SCRIPT_ID = "ck-turnstile-script";
 
 const VOTE_OPTIONS = [
   { value: "support", label: "Support" },
   { value: "not_a_fit", label: "Not a Fit" },
   { value: "unclear", label: "Unclear" },
   { value: "unsafe", label: "Unsafe / Illegal / Deceptive" },
+];
+const PRIMARY_VOTE_VALUES = new Set(["support", "not_a_fit"]);
+const FLAG_VOTE_VALUES = new Set(["unclear", "unsafe"]);
+
+const SORT_OPTIONS = [
+  { value: "feed", label: "Feed order" },
+  { value: "alpha_asc", label: "A to Z" },
+  { value: "alpha_desc", label: "Z to A" },
+  { value: "newest", label: "Newest" },
+  { value: "oldest", label: "Oldest" },
 ];
 
 const DIFFERENCE_TYPE_OPTIONS = [
@@ -198,10 +252,20 @@ function isMergeWatch(proposal) {
 
 function getVoteOptionLabel(option, boardCode) {
   if (boardCode === "issue" && option.value === "not_a_fit") {
-    return "Pass";
+    return "Downvote";
   }
 
   return option.label;
+}
+
+function getVoteButtonClassName(voteValue, selectedValue) {
+  return [
+    voteValue === "support" ? "vote-choice-support" : "",
+    voteValue === "not_a_fit" ? "vote-choice-downvote" : "",
+    selectedValue === voteValue ? "active-choice" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 function isUuid(value) {
@@ -210,29 +274,141 @@ function isUuid(value) {
   );
 }
 
-function formatPublicUserId(value) {
-  if (!value) return "";
-  const raw = String(value).trim();
-  if (raw.startsWith("user-")) return raw;
-  const compact = raw.replace(/-/g, "");
-  if (!compact) return "";
-  return `user-${compact.slice(0, 10)}`;
+function SearchIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" className="tool-icon">
+      <circle cx="11" cy="11" r="6.5" />
+      <path d="m16 16 4 4" />
+    </svg>
+  );
+}
+
+function SortIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" className="tool-icon">
+      <path d="M4 7h10" />
+      <path d="M4 12h7" />
+      <path d="M4 17h4" />
+      <path d="M17 6v12" />
+      <path d="m14 15 3 3 3-3" />
+    </svg>
+  );
+}
+
+function wait(ms) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+let turnstileScriptPromise = null;
+
+function loadTurnstileScript() {
+  if (typeof window === "undefined") {
+    return Promise.reject(new Error("Turnstile requires a browser."));
+  }
+
+  if (window.turnstile) {
+    return Promise.resolve(window.turnstile);
+  }
+
+  if (turnstileScriptPromise) {
+    return turnstileScriptPromise;
+  }
+
+  turnstileScriptPromise = new Promise((resolve, reject) => {
+    const existingScript = document.getElementById(TURNSTILE_SCRIPT_ID);
+    if (existingScript) {
+      existingScript.addEventListener("load", () => resolve(window.turnstile), {
+        once: true,
+      });
+      existingScript.addEventListener("error", reject, { once: true });
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.id = TURNSTILE_SCRIPT_ID;
+    script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+    script.async = true;
+    script.defer = true;
+    script.onload = () => resolve(window.turnstile);
+    script.onerror = reject;
+    document.head.appendChild(script);
+  });
+
+  return turnstileScriptPromise;
+}
+
+function TurnstileWidget({ action, resetKey, siteKey, onToken }) {
+  const containerRef = useRef(null);
+  const widgetIdRef = useRef(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    onToken("");
+
+    if (!siteKey) return undefined;
+
+    loadTurnstileScript()
+      .then((turnstile) => {
+        if (cancelled || !containerRef.current || !turnstile?.render) return;
+
+        widgetIdRef.current = turnstile.render(containerRef.current, {
+          sitekey: siteKey,
+          action,
+          theme: "light",
+          callback: (token) => onToken(token || ""),
+          "expired-callback": () => onToken(""),
+          "error-callback": () => onToken(""),
+        });
+      })
+      .catch(() => onToken(""));
+
+    return () => {
+      cancelled = true;
+      if (widgetIdRef.current && window.turnstile?.remove) {
+        window.turnstile.remove(widgetIdRef.current);
+      }
+      widgetIdRef.current = null;
+    };
+  }, [action, onToken, resetKey, siteKey]);
+
+  if (!siteKey) return null;
+
+  return (
+    <div className="turnstile-wrap" aria-label="Human check">
+      <div ref={containerRef} />
+    </div>
+  );
 }
 
 function App() {
   const [me, setMe] = useState(null);
   const [sessionChecked, setSessionChecked] = useState(false);
   const [introOpen, setIntroOpen] = useState(false);
+  const [tutorialOpen, setTutorialOpen] = useState(false);
+  const [tutorialStep, setTutorialStep] = useState(0);
+  const [postReviewTutorialStep, setPostReviewTutorialStep] = useState("");
+  const [postReviewTutorialBoard, setPostReviewTutorialBoard] = useState("");
+  const postReviewTutorialTouchStartY = useRef(null);
+  const [requiredReviewPromptAcceptedFor, setRequiredReviewPromptAcceptedFor] =
+    useState("");
 
   const [authMode, setAuthMode] = useState("login");
   const [email, setEmail] = useState(DEFAULT_AUTH_EMAIL);
   const [password, setPassword] = useState(PROTOTYPE_PASSWORD);
+  const [confirmPassword, setConfirmPassword] = useState(PROTOTYPE_PASSWORD);
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState("");
   const [authSuccess, setAuthSuccess] = useState("");
   const [passwordResetToken, setPasswordResetToken] = useState("");
   const [passwordResetNewPassword, setPasswordResetNewPassword] = useState("");
+  const [passwordResetConfirmPassword, setPasswordResetConfirmPassword] = useState("");
+  const [turnstileToken, setTurnstileToken] = useState("");
+  const [turnstileWidgetResetKey, setTurnstileWidgetResetKey] = useState(0);
   const [verificationToken, setVerificationToken] = useState("");
+  const [pendingDevVerificationToken, setPendingDevVerificationToken] =
+    useState("");
   const [verificationLoading, setVerificationLoading] = useState(false);
   const [verificationError, setVerificationError] = useState("");
   const [verificationSuccess, setVerificationSuccess] = useState("");
@@ -311,6 +487,11 @@ function App() {
   const [solutionOptions, setSolutionOptions] = useState([]);
   const [solutionTargetIsPublishedWinner, setSolutionTargetIsPublishedWinner] =
     useState(false);
+  const [activeLocaleName, setActiveLocaleName] = useState(DEFAULT_LOCALE_NAME);
+  const [sourceInfo, setSourceInfo] = useState(null);
+  const [buildProvenance, setBuildProvenance] = useState(null);
+  const [localeRegistry, setLocaleRegistry] = useState(null);
+  const [sourceInfoError, setSourceInfoError] = useState("");
   const [outcomeData, setOutcomeData] = useState(null);
   const [outcomeResolveLoading, setOutcomeResolveLoading] = useState(false);
   const [outcomeResolveError, setOutcomeResolveError] = useState("");
@@ -318,7 +499,6 @@ function App() {
 
   const [reviewActionLoading, setReviewActionLoading] = useState(false);
   const [reviewActionError, setReviewActionError] = useState("");
-  const [reviewActionSuccess, setReviewActionSuccess] = useState("");
   const [trustResolveLoading, setTrustResolveLoading] = useState(false);
   const [trustResolveError, setTrustResolveError] = useState("");
   const [trustResolveSuccess, setTrustResolveSuccess] = useState("");
@@ -327,24 +507,38 @@ function App() {
   const [voteError, setVoteError] = useState("");
   const [voteSuccess, setVoteSuccess] = useState("");
   const [localSentimentVotes, setLocalSentimentVotes] = useState({});
+  const [discussionComments, setDiscussionComments] = useState([]);
+  const [discussionLoading, setDiscussionLoading] = useState(false);
+  const [discussionError, setDiscussionError] = useState("");
+  const [discussionBody, setDiscussionBody] = useState("");
+  const [discussionSubmitting, setDiscussionSubmitting] = useState(false);
+  const [discussionVotingId, setDiscussionVotingId] = useState("");
 
   const [issueForm, setIssueForm] = useState(emptyIssueForm);
   const [solutionForm, setSolutionForm] = useState(emptySolutionForm);
   const [submitLoading, setSubmitLoading] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [submitSuccess, setSubmitSuccess] = useState("");
+  const [submissionPreviewMode, setSubmissionPreviewMode] = useState("");
   const [submissionPanelOpen, setSubmissionPanelOpen] = useState(false);
   const [searchPanelOpen, setSearchPanelOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [sortPanelOpen, setSortPanelOpen] = useState(false);
+  const [sortMode, setSortMode] = useState("feed");
+  const [feedPane, setFeedPane] = useState("unreviewed");
+  const [advancingFromSubmissionId, setAdvancingFromSubmissionId] = useState("");
+  const [advancingToSubmissionId, setAdvancingToSubmissionId] = useState("");
+  const [feedAdvanceLocked, setFeedAdvanceLocked] = useState(false);
 
   const canParticipate = Boolean(me?.email_verified);
 
   useEffect(() => {
     initializeSession();
+    loadPublicMetadata();
   }, []);
 
   useEffect(() => {
-    if (me) {
+    if (me?.email_verified) {
       loadTabData(activeTab);
     }
     // loadTabData is kept as an event-style helper in this prototype.
@@ -365,9 +559,33 @@ function App() {
 
   const activeTabIsModerator = Boolean(activeTabConfig?.moderatorOnly);
 
-  function shouldOpenIntro() {
+  function getIntroStorageKey(user = me) {
+    return user?.email
+      ? `${INTRO_STORAGE_KEY}:${encodeURIComponent(user.email)}`
+      : INTRO_STORAGE_KEY;
+  }
+
+  function getPostReviewTutorialStorageKey(user = me) {
+    return user?.email
+      ? `${POST_REVIEW_TUTORIAL_STORAGE_KEY}:${encodeURIComponent(user.email)}`
+      : POST_REVIEW_TUTORIAL_STORAGE_KEY;
+  }
+
+  function shouldOpenIntro(user) {
+    if (user?.onboarding_required) return true;
+
     try {
-      return window.localStorage.getItem(INTRO_STORAGE_KEY) !== "true";
+      return window.localStorage.getItem(getIntroStorageKey(user)) !== "true";
+    } catch {
+      return true;
+    }
+  }
+
+  function shouldOpenPostReviewTutorial(user = me) {
+    if (user?.onboarding_required) return true;
+
+    try {
+      return window.localStorage.getItem(getPostReviewTutorialStorageKey(user)) !== "true";
     } catch {
       return true;
     }
@@ -377,7 +595,8 @@ function App() {
     try {
       const data = await api.me();
       setMe(data);
-      setIntroOpen(shouldOpenIntro());
+      setIntroOpen(shouldOpenIntro(data));
+      setTutorialOpen(false);
     } catch {
       setMe(null);
     } finally {
@@ -385,13 +604,40 @@ function App() {
     }
   }
 
+  async function loadPublicMetadata() {
+    try {
+      const [sourceData, provenanceData, registryData] = await Promise.all([
+        api.getSourceInfo(),
+        api.getBuildProvenance(),
+        api.getLocaleRegistry(),
+      ]);
+      setSourceInfo(sourceData);
+      setBuildProvenance(provenanceData);
+      setLocaleRegistry(registryData);
+      setSourceInfoError("");
+    } catch (error) {
+      setSourceInfoError(error.message || "Source and build metadata unavailable.");
+    }
+  }
+
   function clearAppStateForSignedOutUser() {
     setMe(null);
     setIntroOpen(false);
+    setTutorialOpen(false);
+    setTutorialStep(0);
+    setPostReviewTutorialStep("");
+    setPostReviewTutorialBoard("");
+    setRequiredReviewPromptAcceptedFor("");
     setItems([]);
     setItemsError("");
     setSelectedProposal(null);
     setSelectedProposalError("");
+    setDiscussionComments([]);
+    setDiscussionLoading(false);
+    setDiscussionError("");
+    setDiscussionBody("");
+    setDiscussionSubmitting(false);
+    setDiscussionVotingId("");
     setSelectedExecution(null);
     setSelectedExecutionError("");
     setNavDrawerOpen(false);
@@ -428,35 +674,197 @@ function App() {
     setSolutionTargetOptions([]);
     setSolutionOptions([]);
     setSolutionTargetIsPublishedWinner(false);
+    setActiveLocaleName(DEFAULT_LOCALE_NAME);
     setOutcomeData(null);
     setOutcomeResolveError("");
     setOutcomeResolveSuccess("");
     setReviewActionError("");
-    setReviewActionSuccess("");
     setVoteError("");
     setVoteSuccess("");
     setLocalSentimentVotes({});
+    setDiscussionComments([]);
+    setDiscussionLoading(false);
+    setDiscussionError("");
+    setDiscussionBody("");
+    setDiscussionSubmitting(false);
+    setDiscussionVotingId("");
     setSubmitError("");
     setSubmitSuccess("");
+    setSubmissionPreviewMode("");
     setSubmissionPanelOpen(false);
     setSearchPanelOpen(false);
+    setSortPanelOpen(false);
     setSearchQuery("");
+    setFeedPane("unreviewed");
+    setAdvancingFromSubmissionId("");
+    setAdvancingToSubmissionId("");
+    setFeedAdvanceLocked(false);
     setVerificationToken("");
+    setPendingDevVerificationToken("");
     setVerificationError("");
     setVerificationSuccess("");
   }
 
-  function handleCloseIntro() {
+  function persistIntroDismissed() {
     try {
-      window.localStorage.setItem(INTRO_STORAGE_KEY, "true");
+      window.localStorage.setItem(getIntroStorageKey(), "true");
     } catch {
       // Local storage can be unavailable in restricted browser modes.
     }
+  }
+
+  function persistPostReviewTutorialDone() {
+    try {
+      window.localStorage.setItem(getPostReviewTutorialStorageKey(), "true");
+    } catch {
+      // Local storage can be unavailable in restricted browser modes.
+    }
+  }
+
+  function finishPostReviewTutorial() {
+    persistPostReviewTutorialDone();
+    setPostReviewTutorialStep("");
+    setPostReviewTutorialBoard("");
+    postReviewTutorialTouchStartY.current = null;
+  }
+
+  function scrollDetailsPaneAfterTutorial(deltaY = 360) {
+    const scrollDistance = Math.max(280, Math.min(720, Math.abs(deltaY) * 2));
+
+    window.requestAnimationFrame(() => {
+      document.querySelector(".bottom-detail-drawer-content")?.scrollBy({
+        top: scrollDistance,
+        behavior: "smooth",
+      });
+    });
+  }
+
+  function advancePostReviewTutorialFromScroll(deltaY = 360) {
+    if (postReviewTutorialStep !== POST_REVIEW_TUTORIAL_STEPS.DETAILS_OPENED) {
+      return;
+    }
+
+    finishPostReviewTutorial();
+    scrollDetailsPaneAfterTutorial(deltaY);
+  }
+
+  function handlePostReviewTutorialDetailWheel(event) {
+    if (event.deltaY <= 0) return;
+    event.preventDefault();
+    advancePostReviewTutorialFromScroll(event.deltaY);
+  }
+
+  function handlePostReviewTutorialDetailTouchStart(event) {
+    postReviewTutorialTouchStartY.current =
+      event.touches?.[0]?.clientY ?? null;
+  }
+
+  function handlePostReviewTutorialDetailTouchMove(event) {
+    const startY = postReviewTutorialTouchStartY.current;
+    const currentY = event.touches?.[0]?.clientY;
+    if (startY == null || currentY == null) return;
+
+    const deltaY = startY - currentY;
+    if (deltaY <= 24) return;
+
+    event.preventDefault();
+    advancePostReviewTutorialFromScroll(deltaY);
+  }
+
+  function handlePostReviewTutorialDetailKeyDown(event) {
+    if (!["ArrowDown", "PageDown", " ", "Spacebar"].includes(event.key)) {
+      return;
+    }
+
+    event.preventDefault();
+    advancePostReviewTutorialFromScroll(360);
+  }
+
+  function handlePostReviewTutorialIntroClick() {
+    setPostReviewTutorialStep(POST_REVIEW_TUTORIAL_STEPS.UNLIMITED_VOTING);
+  }
+
+  function handlePostReviewTutorialVotingClick() {
+    setPostReviewTutorialStep(POST_REVIEW_TUTORIAL_STEPS.PICK_SUBMISSION);
+  }
+
+  function startPostReviewTutorial(boardCode) {
+    setPostReviewTutorialBoard(boardCode || "issue");
+    setPostReviewTutorialStep(POST_REVIEW_TUTORIAL_STEPS.REAL_SUBMISSIONS);
+    setTutorialOpen(false);
     setIntroOpen(false);
+    setSubmissionPanelOpen(false);
+    setSearchPanelOpen(false);
+    setSortPanelOpen(false);
+    setSearchQuery("");
+    setSortMode("feed");
+    setFeedPane("unreviewed");
+  }
+
+  function handleIntroNext() {
+    setIntroOpen(false);
+    setTutorialStep(0);
+    setTutorialOpen(true);
+    setNavDrawerOpen(true);
+    setDetailDrawerOpen(false);
+    setFrontDrawer("nav");
+  }
+
+  function handleSkipIntro() {
+    persistIntroDismissed();
+    setIntroOpen(false);
+    setTutorialOpen(false);
+    setNavDrawerOpen(false);
+  }
+
+  function handleTutorialBack() {
+    setTutorialStep((currentStep) => Math.max(0, currentStep - 1));
+  }
+
+  function handleTutorialNext() {
+    if (tutorialStep >= TUTORIAL_STEPS.length - 1) {
+      persistIntroDismissed();
+      setTutorialOpen(false);
+      setTutorialStep(0);
+      setNavDrawerOpen(false);
+      return;
+    }
+    setTutorialStep((currentStep) => currentStep + 1);
+  }
+
+  function handleSkipTutorial() {
+    persistIntroDismissed();
+    setTutorialOpen(false);
+    setTutorialStep(0);
+    setNavDrawerOpen(false);
   }
 
   function handleShowIntro() {
+    setTutorialOpen(false);
+    setTutorialStep(0);
     setIntroOpen(true);
+  }
+
+  function handleContinueRequiredReviewPrompt(proposalId) {
+    setRequiredReviewPromptAcceptedFor(proposalId ? "seen" : "");
+  }
+
+  function resetAuthTransientState() {
+    setAuthError("");
+    setAuthSuccess("");
+    setVerificationToken("");
+    setVerificationError("");
+    setVerificationSuccess("");
+    setPasswordResetToken("");
+    setPasswordResetNewPassword("");
+    setPasswordResetConfirmPassword("");
+    setTurnstileToken("");
+    setTurnstileWidgetResetKey((current) => current + 1);
+  }
+
+  function switchAuthMode(nextMode) {
+    setAuthMode(nextMode);
+    resetAuthTransientState();
   }
 
   async function handleProtectedError(error) {
@@ -485,10 +893,14 @@ function App() {
     setAuthMode("login");
     setEmail(account.email);
     setPassword(account.password);
+    setConfirmPassword(account.password);
     setAuthError("");
     setAuthSuccess("");
     setPasswordResetToken("");
     setPasswordResetNewPassword("");
+    setPasswordResetConfirmPassword("");
+    setTurnstileToken("");
+    setTurnstileWidgetResetKey((current) => current + 1);
   }
 
   async function loadParticipationData(boardCode = getBoardForTab(activeTab)) {
@@ -514,6 +926,9 @@ function App() {
         : [];
 
       setUnlockStatus(statusData);
+      if (statusData?.locale_name) {
+        setActiveLocaleName(statusData.locale_name);
+      }
       setReviewQueues({
         issues_to_review: queuesData.issues_to_review || [],
         solutions_to_review: queuesData.solutions_to_review || [],
@@ -556,12 +971,14 @@ function App() {
     }
   }
 
-  async function loadTabData(tabKey) {
+  async function loadTabData(tabKey, options = {}) {
     try {
       setItemsLoading(true);
       setItemsError("");
 
       let data;
+      const canUseParticipationGate =
+        options.canParticipate ?? canParticipate;
 
       if (tabKey === "issues") {
         data = await api.getIssues();
@@ -621,7 +1038,7 @@ function App() {
       const activeBoard = tabKey === "solutions" ? "solution" : "issue";
       const shouldShowRequiredReviews =
         reviewGateAppliesForTab &&
-        canParticipate &&
+        canUseParticipationGate &&
         statusData &&
         !statusData.review_unlocked &&
         statusData.required_review_actions > statusData.completed_review_actions;
@@ -662,6 +1079,31 @@ function App() {
   async function handleAuthSubmit(event) {
     event.preventDefault();
 
+    const authNeedsTurnstile =
+      Boolean(TURNSTILE_SITE_KEY) &&
+      (authMode === "register" || authMode === "resetRequest");
+
+    if (authMode === "register" && password !== confirmPassword) {
+      setAuthError("Passwords must match.");
+      setAuthSuccess("");
+      return;
+    }
+
+    if (
+      authMode === "resetConfirm" &&
+      passwordResetNewPassword !== passwordResetConfirmPassword
+    ) {
+      setAuthError("Passwords must match.");
+      setAuthSuccess("");
+      return;
+    }
+
+    if (authNeedsTurnstile && !turnstileToken) {
+      setAuthError("Complete the human check and try again.");
+      setAuthSuccess("");
+      return;
+    }
+
     try {
       setAuthLoading(true);
       setAuthError("");
@@ -673,32 +1115,46 @@ function App() {
       if (authMode === "login") {
         const loginData = await api.login(email, password);
         setMe(loginData);
-        setIntroOpen(shouldOpenIntro());
-        handleTabChange("issues");
+        if (!loginData.email_verified && pendingDevVerificationToken) {
+          setVerificationToken(pendingDevVerificationToken);
+          setVerificationSuccess("Local verification token filled.");
+          setPendingDevVerificationToken("");
+        }
+        setIntroOpen(
+          loginData.email_verified ? shouldOpenIntro(loginData) : false
+        );
+        setTutorialOpen(false);
+        if (loginData.email_verified) {
+          handleTabChange("issues");
+        } else {
+          setActiveTab("issues");
+        }
       } else if (authMode === "register") {
-        const registerData = await api.register(email, password);
-        const loginData = await api.login(email, password);
-        setMe(loginData);
-        setIntroOpen(shouldOpenIntro());
-        handleTabChange("issues");
+        const registerData = await api.register(email, password, turnstileToken);
+        setPassword("");
+        setConfirmPassword("");
+        setAuthMode("login");
         if (registerData.dev_verification_token) {
-          setVerificationToken(registerData.dev_verification_token);
-          setVerificationSuccess("Verification token generated for this prototype.");
+          setPendingDevVerificationToken(registerData.dev_verification_token);
+          setAuthSuccess(
+            "Account created. Log in and the local verification token will be filled."
+          );
         } else if (registerData.verification_email_sent === false) {
-          setVerificationError(
-            "Account created, but the verification email could not be sent. Try requesting another token in a moment."
+          setAuthSuccess(
+            "Account created, but verification email could not be sent. Log in and use Send Verification once email is configured."
           );
         } else if (registerData.verification_required) {
-          setVerificationSuccess("Verification instructions sent.");
+          setAuthSuccess("Account created. Check your email, then log in to verify.");
+        } else {
+          setAuthSuccess("Account created. Log in when ready.");
         }
       } else if (authMode === "resetRequest") {
-        const resetData = await api.requestPasswordReset(email);
+        const resetData = await api.requestPasswordReset(email, turnstileToken);
         if (resetData.dev_reset_token) {
           setPasswordResetToken(resetData.dev_reset_token);
           setAuthMode("resetConfirm");
           setAuthSuccess("Reset token generated for this prototype.");
         } else {
-          setAuthMode("resetConfirm");
           setAuthSuccess("If that account exists, reset instructions were sent.");
         }
       } else if (authMode === "resetConfirm") {
@@ -706,6 +1162,7 @@ function App() {
         setPassword("");
         setPasswordResetToken("");
         setPasswordResetNewPassword("");
+        setPasswordResetConfirmPassword("");
         setAuthMode("login");
         setAuthSuccess("Password reset. Log in with your new password.");
       }
@@ -715,6 +1172,10 @@ function App() {
       setAuthError(error.message || "Authentication failed.");
     } finally {
       setAuthLoading(false);
+      if (authNeedsTurnstile) {
+        setTurnstileToken("");
+        setTurnstileWidgetResetKey((current) => current + 1);
+      }
     }
   }
 
@@ -731,7 +1192,10 @@ function App() {
       setMe(data);
       setVerificationToken("");
       setVerificationSuccess("Email verified.");
-      await loadTabData(activeTab);
+      setIntroOpen(false);
+      setTutorialOpen(false);
+      setActiveTab("issues");
+      await loadTabData("issues", { canParticipate: Boolean(data.email_verified) });
     } catch (error) {
       if (await handleProtectedError(error)) return;
       setVerificationError(error.message || "Failed to verify email.");
@@ -770,6 +1234,15 @@ function App() {
   }
 
   async function handleSelectProposal(id) {
+    if (feedAdvanceLocked) return;
+    if (
+      postReviewTutorialStep === POST_REVIEW_TUTORIAL_STEPS.PICK_SUBMISSION &&
+      postReviewTutorialTargetId &&
+      id !== postReviewTutorialTargetId
+    ) {
+      return;
+    }
+
     try {
       setSelectedProposalLoading(true);
       setSelectedProposalError("");
@@ -791,6 +1264,10 @@ function App() {
       setReconsiderationSuccess("");
       setReconsiderationResolveError("");
       setReconsiderationResolveSuccess("");
+      setDiscussionComments([]);
+      setDiscussionError("");
+      setDiscussionBody("");
+      setDiscussionVotingId("");
       setDetailDrawerOpen(true);
       setFrontDrawer("detail");
 
@@ -813,6 +1290,8 @@ function App() {
                 ...data.proposal,
                 ...localProposal,
                 review_reason: localItem?.review_reason || localProposal.review_reason,
+                threshold_signal:
+                  localItem?.threshold_signal || localProposal.threshold_signal,
               },
             }
           : data;
@@ -832,6 +1311,13 @@ function App() {
           ? "solution"
           : mergedData?.proposal?.board_code || getBoardForTab(activeTab);
       await loadParticipationData(participationBoard);
+      await loadProposalComments(id);
+      if (
+        postReviewTutorialStep === POST_REVIEW_TUTORIAL_STEPS.PICK_SUBMISSION &&
+        id === postReviewTutorialTargetId
+      ) {
+        setPostReviewTutorialStep(POST_REVIEW_TUTORIAL_STEPS.DETAILS_OPENED);
+      }
     } catch (error) {
       if (await handleProtectedError(error)) return;
       setSelectedProposalError(error.message || "Failed to load proposal.");
@@ -845,12 +1331,35 @@ function App() {
     }
   }
 
+  async function loadProposalComments(proposalId) {
+    if (!proposalId) return;
+
+    try {
+      setDiscussionLoading(true);
+      setDiscussionError("");
+      const data = await api.getProposalComments(proposalId);
+      setDiscussionComments(data.comments || []);
+    } catch (error) {
+      if (await handleProtectedError(error)) return;
+      setDiscussionError(error.message || "Failed to load discussion.");
+      setDiscussionComments([]);
+    } finally {
+      setDiscussionLoading(false);
+    }
+  }
+
   async function handleSelectExecution(id) {
+    if (feedAdvanceLocked) return;
+
     try {
       setSelectedExecutionLoading(true);
       setSelectedExecutionError("");
       setSelectedProposal(null);
       setSelectedProposalError("");
+      setDiscussionComments([]);
+      setDiscussionError("");
+      setDiscussionBody("");
+      setDiscussionVotingId("");
       setDetailDrawerOpen(true);
       setFrontDrawer("detail");
 
@@ -1316,15 +1825,12 @@ function App() {
     try {
       setReviewActionLoading(true);
       setReviewActionError("");
-      setReviewActionSuccess("");
 
       const result = await api.submitReviewAction(proposalId, voteValue);
       setLocalSentimentVotes((current) => ({
         ...current,
         [proposalId]: result.sentiment_vote || voteValue,
       }));
-      setReviewActionSuccess("Review vote credited.");
-
       if (selectedProposal?.proposal?.id === proposalId) {
         const refreshed = await api.getProposal(proposalId);
         setSelectedProposal(refreshed);
@@ -1333,6 +1839,9 @@ function App() {
       await loadParticipationData(reviewedBoard);
       if (result.review_unlocked) {
         handleTabChange(getTabForBoard(reviewedBoard));
+        if (shouldOpenPostReviewTutorial()) {
+          startPostReviewTutorial(reviewedBoard);
+        }
       } else {
         await loadTabData(activeTab);
       }
@@ -1373,6 +1882,12 @@ function App() {
   async function handleSentimentVote(voteValue) {
     if (!selectedProposal?.proposal?.id) return;
     const proposalId = selectedProposal.proposal.id;
+    const shouldAdvanceFeed =
+      (activeTab === "issues" || activeTab === "solutions") &&
+      feedPane === "unreviewed";
+    const nextProposalId = shouldAdvanceFeed
+      ? getNextVisibleFeedSubmissionId(proposalId)
+      : "";
 
     try {
       setVoteLoading(true);
@@ -1384,15 +1899,42 @@ function App() {
         ...current,
         [proposalId]: result.sentiment_vote || voteValue,
       }));
-      setVoteSuccess("Vote saved.");
+      if (shouldAdvanceFeed) {
+        setFeedAdvanceLocked(true);
+        setAdvancingFromSubmissionId(proposalId);
+        setAdvancingToSubmissionId(nextProposalId);
+        setDetailDrawerOpen(false);
+        await wait(FEED_ADVANCE_CLOSE_MS);
+      }
 
       const refreshed = await api.getProposal(proposalId);
-      setSelectedProposal(refreshed);
       await Promise.all([
         loadParticipationData(refreshed.proposal.board_code),
         loadTabData(activeTab),
       ]);
+
+      if (nextProposalId) {
+        setVoteSuccess("");
+        await handleSelectProposal(nextProposalId);
+        setFeedAdvanceLocked(false);
+        window.setTimeout(() => {
+          setAdvancingFromSubmissionId("");
+          setAdvancingToSubmissionId("");
+        }, FEED_ADVANCE_HIGHLIGHT_MS);
+      } else if (shouldAdvanceFeed) {
+        setSelectedProposal(null);
+        setSelectedProposalError("");
+        setDetailDrawerOpen(false);
+        setVoteSuccess("");
+        setAdvancingFromSubmissionId("");
+        setAdvancingToSubmissionId("");
+        setFeedAdvanceLocked(false);
+      } else {
+        setSelectedProposal(refreshed);
+        setVoteSuccess("Vote saved.");
+      }
     } catch (error) {
+      setFeedAdvanceLocked(false);
       if (await handleProtectedError(error)) return;
       setVoteError(error.message || "Failed to save vote.");
     } finally {
@@ -1442,15 +1984,54 @@ function App() {
     }
   }
 
+  async function handleSubmitDiscussionComment(event) {
+    event.preventDefault();
+    const proposalId = selectedProposal?.proposal?.id;
+    if (!proposalId) return;
+
+    try {
+      setDiscussionSubmitting(true);
+      setDiscussionError("");
+      await api.createProposalComment(proposalId, discussionBody);
+      setDiscussionBody("");
+      await loadProposalComments(proposalId);
+    } catch (error) {
+      if (await handleProtectedError(error)) return;
+      setDiscussionError(error.message || "Failed to post comment.");
+    } finally {
+      setDiscussionSubmitting(false);
+    }
+  }
+
+  async function handleDiscussionVote(commentId, voteValue) {
+    const proposalId = selectedProposal?.proposal?.id;
+    if (!proposalId || !commentId) return;
+
+    try {
+      setDiscussionVotingId(commentId);
+      setDiscussionError("");
+      await api.voteProposalComment(proposalId, commentId, voteValue);
+      await loadProposalComments(proposalId);
+    } catch (error) {
+      if (await handleProtectedError(error)) return;
+      setDiscussionError(error.message || "Failed to save comment vote.");
+    } finally {
+      setDiscussionVotingId("");
+    }
+  }
+
   function updateIssueForm(field, value) {
+    setSubmissionPreviewMode("");
     setIssueForm((current) => ({ ...current, [field]: value }));
   }
 
   function updateSolutionForm(field, value) {
+    setSubmissionPreviewMode("");
     setSolutionForm((current) => ({ ...current, [field]: value }));
   }
 
   function updateSolutionCriterion(index, field, value) {
+    setSubmissionPreviewMode("");
     setSolutionForm((current) => ({
       ...current,
       completionCriteria: asArray(current.completionCriteria).map((criterion, itemIndex) =>
@@ -1460,6 +2041,7 @@ function App() {
   }
 
   function addSolutionCriterion() {
+    setSubmissionPreviewMode("");
     setSolutionForm((current) => {
       const currentCriteria = asArray(current.completionCriteria);
 
@@ -1478,6 +2060,7 @@ function App() {
   }
 
   function removeSolutionCriterion(index) {
+    setSubmissionPreviewMode("");
     setSolutionForm((current) => {
       const nextCriteria = asArray(current.completionCriteria).filter(
         (_, itemIndex) => itemIndex !== index
@@ -1493,6 +2076,7 @@ function App() {
   }
 
   function updateSolutionExecutionEntry(index, field, value) {
+    setSubmissionPreviewMode("");
     setSolutionForm((current) => ({
       ...current,
       executionTrackingEntries: asArray(current.executionTrackingEntries).map(
@@ -1503,6 +2087,7 @@ function App() {
   }
 
   function addSolutionExecutionEntry() {
+    setSubmissionPreviewMode("");
     setSolutionForm((current) => {
       const currentEntries = asArray(current.executionTrackingEntries);
 
@@ -1521,6 +2106,7 @@ function App() {
   }
 
   function removeSolutionExecutionEntry(index) {
+    setSubmissionPreviewMode("");
     setSolutionForm((current) => {
       const nextEntries = asArray(current.executionTrackingEntries).filter(
         (_, itemIndex) => itemIndex !== index
@@ -1540,6 +2126,7 @@ function App() {
     if (!proposal) return;
 
     setSubmitError("");
+    setSubmissionPreviewMode("");
 
     if (proposal.board_code === "issue") {
       setIssueForm({
@@ -1586,19 +2173,29 @@ function App() {
     event.preventDefault();
 
     try {
-      setSubmitLoading(true);
-      setSubmitError("");
-      setSubmitSuccess("");
-
-      const result = await api.createProposal({
+      const payload = {
         board_code: "issue",
         title: issueForm.title,
         problem_description: issueForm.problemDescription,
         affected_scope: issueForm.affectedScope,
         why_it_matters: issueForm.whyItMatters,
-      });
+      };
+
+      if (submissionPreviewMode !== "issue") {
+        setSubmitError("");
+        setSubmitSuccess("");
+        setSubmissionPreviewMode("issue");
+        return;
+      }
+
+      setSubmitLoading(true);
+      setSubmitError("");
+      setSubmitSuccess("");
+
+      const result = await api.createProposal(payload);
 
       setIssueForm(emptyIssueForm);
+      setSubmissionPreviewMode("");
       setSubmitSuccess("Issue submitted.");
       setSubmissionPanelOpen(false);
       await Promise.all([loadTabData("issues"), loadParticipationData("issue")]);
@@ -1618,11 +2215,7 @@ function App() {
       solutionTargetProposal?.id || solutionForm.parentIssueProposalId;
 
     try {
-      setSubmitLoading(true);
-      setSubmitError("");
-      setSubmitSuccess("");
-
-      const result = await api.createProposal({
+      const payload = {
         board_code: "solution",
         title: solutionForm.title,
         action_description: solutionForm.actionDescription,
@@ -1635,9 +2228,23 @@ function App() {
         execution_tracking_entries: parseExecutionEntries(
           solutionForm.executionTrackingEntries
         ),
-      });
+      };
+
+      if (submissionPreviewMode !== "solution") {
+        setSubmitError("");
+        setSubmitSuccess("");
+        setSubmissionPreviewMode("solution");
+        return;
+      }
+
+      setSubmitLoading(true);
+      setSubmitError("");
+      setSubmitSuccess("");
+
+      const result = await api.createProposal(payload);
 
       setSolutionForm(emptySolutionForm);
+      setSubmissionPreviewMode("");
       setSubmitSuccess("Solution submitted.");
       setSubmissionPanelOpen(false);
       await Promise.all([loadTabData("solutions"), loadParticipationData("solution")]);
@@ -1662,7 +2269,41 @@ function App() {
     }
   }
 
+  function clearSelectedBottomPane() {
+    setSelectedProposal(null);
+    setSelectedProposalError("");
+    setSelectedExecution(null);
+    setSelectedExecutionError("");
+    setSelectedAppeal(null);
+    setSelectedReconsideration(null);
+    setVoteError("");
+    setVoteSuccess("");
+    setDiscussionComments([]);
+    setDiscussionLoading(false);
+    setDiscussionError("");
+    setDiscussionBody("");
+    setDiscussionSubmitting(false);
+    setDiscussionVotingId("");
+    setMergeError("");
+    setMergeSuccess("");
+    setMergeVoteTargetId("");
+    resetDistinctionForm();
+    setDistinctionError("");
+    setDistinctionSuccess("");
+    setDetailDrawerOpen(false);
+  }
+
+  function handleFeedPaneChange(nextPane) {
+    if (feedAdvanceLocked || postReviewTutorialActive || nextPane === feedPane) return;
+
+    setFeedPane(nextPane);
+    setSubmissionPanelOpen(false);
+    clearSelectedBottomPane();
+  }
+
   function handleTabChange(tabKey) {
+    if (feedAdvanceLocked || postReviewTutorialActive) return;
+
     if (tabKey === "issues") {
       setRequiredReviewBoard("issue");
     } else if (tabKey === "solutions") {
@@ -1694,13 +2335,21 @@ function App() {
     setReconsiderationResolveSuccess("");
     setOutcomeResolveError("");
     setOutcomeResolveSuccess("");
+    setSubmissionPreviewMode("");
     setSubmissionPanelOpen(false);
     setSearchPanelOpen(false);
+    setSortPanelOpen(false);
     setSearchQuery("");
+    setFeedPane("unreviewed");
+    setAdvancingFromSubmissionId("");
+    setAdvancingToSubmissionId("");
+    setFeedAdvanceLocked(false);
     setDetailDrawerOpen(false);
   }
 
   function handleSubmissionButton() {
+    if (feedAdvanceLocked || postReviewTutorialActive) return;
+
     if (currentUserSubmission?.id) {
       handleSelectProposal(currentUserSubmission.id);
       setNavDrawerOpen(false);
@@ -1710,7 +2359,9 @@ function App() {
 
     setSubmitError("");
     setSubmitSuccess("");
+    setSubmissionPreviewMode("");
     setSearchPanelOpen(false);
+    setSortPanelOpen(false);
     setSelectedProposal(null);
     setSelectedExecution(null);
     setDetailDrawerOpen(false);
@@ -1719,7 +2370,18 @@ function App() {
   }
 
   function toggleNavDrawer() {
+    if (feedAdvanceLocked || postReviewTutorialActive) return;
     if (navigationTabs.length === 0) return;
+
+    if (tutorialOpen) {
+      setSubmissionPanelOpen(false);
+      setSearchPanelOpen(false);
+      setSortPanelOpen(false);
+      setNavDrawerOpen(true);
+      setDetailDrawerOpen(false);
+      setFrontDrawer("nav");
+      return;
+    }
 
     const shouldOpenNav = !(navDrawerOpen && frontDrawer === "nav");
     setSubmissionPanelOpen(false);
@@ -1732,6 +2394,9 @@ function App() {
   }
 
   function toggleDetailDrawer() {
+    if (feedAdvanceLocked || postReviewTutorialActive) return;
+    if (tutorialOpen) return;
+
     const shouldOpenDetail = !(detailDrawerOpen && frontDrawer === "detail");
     setSubmissionPanelOpen(false);
     setNavDrawerOpen(false);
@@ -1759,14 +2424,11 @@ function App() {
 
   function getItemTitle(item) {
     if (item?.flag_code) {
-      return `${formatActionType(item.flag_code)}: ${
-        item.user_public_id || "unknown user"
-      }`;
+      return formatActionType(item.flag_code);
     }
     if (item?.result_status) {
-      const boardLabel = formatActionType(item.board_code);
       const winnerTitle = item.winning_proposal?.title || "No ranked winner";
-      return `Cycle ${item.cycle_number} ${boardLabel}: ${winnerTitle}`;
+      return `Cycle ${item.cycle_number}: ${winnerTitle}`;
     }
     if (item?.solution_proposal_id) return item.title;
     if (item?.proposal_title) return `Appeal: ${item.proposal_title}`;
@@ -1836,54 +2498,51 @@ function App() {
     );
   }
 
-  function getViewContextText() {
-    if (showingAccountView || showingSubmissionView) return "";
+  function formatLocaleForSentence(value) {
+    const localeLabel = String(value || DEFAULT_LOCALE_NAME).trim() || DEFAULT_LOCALE_NAME;
+    return localeLabel.toLowerCase() === "world" ? "the World" : localeLabel;
+  }
 
-    if (activeTab === "issues") {
-      if (needsRequiredReview) {
-        return "Required review comes first. After unlock, this board accepts issue submissions and sentiment votes during the active monthly cycle.";
-      }
-      return "Issues are the current cycle's problem proposals. Submit and vote during the same active monthly cycle after review unlock.";
+  function formatLocaleForBrand(value) {
+    const localeLabel = String(value || DEFAULT_LOCALE_NAME).trim() || DEFAULT_LOCALE_NAME;
+    return `${localeLabel} Keystone`;
+  }
+
+  function getActiveLocaleSentenceLabel() {
+    const source =
+      selectedProposal?.proposal ||
+      solutionTargetProposal ||
+      solutionTargetOptions[0] ||
+      outcomeData?.active_cycle ||
+      outcomeData?.cycle ||
+      {};
+    return formatLocaleForSentence(
+      source.locale_name ||
+        source.locale_label ||
+        source.locale_slug ||
+        source.locale ||
+        activeLocaleName ||
+        DEFAULT_LOCALE_NAME
+    );
+  }
+
+  function getRequiredReviewPromptText(item) {
+    const source = item?.proposal || item || {};
+    const boardCode = source.board_code || requiredReviewBoard;
+    const localeLabel = formatLocaleForSentence(
+      source.locale_name ||
+        source.locale_label ||
+        source.locale_slug ||
+        source.locale ||
+        activeLocaleName ||
+        DEFAULT_LOCALE_NAME
+    );
+
+    if (boardCode === "solution") {
+      return "Do you feel that this is a viable solution to the problem above?";
     }
 
-    if (activeTab === "solutions") {
-      if (!solutionTargetProposal) {
-        return "The Solution Board opens after an issue winner has been published from a prior cycle.";
-      }
-      return `Solutions should address the current target issue: ${solutionTargetProposal.title}.`;
-    }
-
-    if (activeTab === "implementations") {
-      return "Implementations are winning solutions that moved into execution tracking after cycle closeout.";
-    }
-
-    if (activeTab === "outcomes") {
-      return outcomeData?.can_resolve
-        ? "The cycle is closed and ready for moderator closeout."
-        : "Outcomes are published after the monthly cycle closes.";
-    }
-
-    if (activeTab === "reviewQueue") {
-      return "Review Queue shows proposals that reached merge or moderation review thresholds.";
-    }
-
-    if (activeTab === "trustReview") {
-      return "Trust Review holds suspicious activity flags for moderator acknowledgement or dismissal.";
-    }
-
-    if (activeTab === "appeals") {
-      return "Appeals are author requests to review eligible moderation archives.";
-    }
-
-    if (activeTab === "reconsiderations") {
-      return "Reconsideration reviews archived proposals after a temporary 72-hour community signal window.";
-    }
-
-    if (activeTab === "archive") {
-      return "Archive preserves proposals as history. Cycle-closed items can be copied into a fresh submission.";
-    }
-
-    return "";
+    return `Do you feel that the following is a major issue in ${localeLabel}?`;
   }
 
   function getEmptyStateText() {
@@ -1936,6 +2595,9 @@ function App() {
 
   function getThresholdCountSummary(item) {
     const source = item?.winning_proposal || item?.proposal || item;
+    if (source?.threshold_signal) return source.threshold_signal;
+    if (item?.threshold_signal) return item.threshold_signal;
+
     const reviewReason = item?.review_reason || source?.review_reason || "";
     const counts = getItemCounts(item);
     const total = getTotalVoteCount(item);
@@ -1991,7 +2653,7 @@ function App() {
       .map((item) => item?.proposal || item)
       .find(
         (item) =>
-          item?.author_user_id === me?.user_id &&
+          item?.current_user_is_author &&
           item?.board_code === boardCode &&
           !item?.is_archived &&
           item?.primary_state !== "archived"
@@ -2020,19 +2682,60 @@ function App() {
     return haystack.includes(query.trim().toLowerCase());
   }
 
+  function getSortableSource(item) {
+    return item?.winning_proposal || item?.proposal || item || {};
+  }
+
+  function getItemDateMs(item) {
+    const source = getSortableSource(item);
+    const rawDate =
+      source?.created_at ||
+      source?.updated_at ||
+      source?.resource_updated_at ||
+      item?.created_at ||
+      item?.updated_at ||
+      "";
+    const parsed = Date.parse(rawDate);
+    return Number.isNaN(parsed) ? 0 : parsed;
+  }
+
+  function compareItemsBySort(left, right) {
+    const leftTitle = getItemTitle(left).toLowerCase();
+    const rightTitle = getItemTitle(right).toLowerCase();
+    const byTitle = leftTitle.localeCompare(rightTitle);
+    const byDate = getItemDateMs(right) - getItemDateMs(left);
+
+    if (sortMode === "alpha_asc") return byTitle;
+    if (sortMode === "alpha_desc") return -byTitle;
+    if (sortMode === "newest") return byDate || byTitle;
+    if (sortMode === "oldest") return -byDate || byTitle;
+    return 0;
+  }
+
+  function getNextVisibleFeedSubmissionId(currentId) {
+    if (!(activeTab === "issues" || activeTab === "solutions")) return "";
+
+    const visibleIds = boardDisplayItems
+      .filter((item) => item && !item.section_marker)
+      .map(getItemId)
+      .filter(Boolean);
+    const currentIndex = visibleIds.indexOf(currentId);
+
+    if (currentIndex >= 0 && currentIndex < visibleIds.length - 1) {
+      return visibleIds[currentIndex + 1];
+    }
+
+    return "";
+  }
+
   function getExtraBadge(item) {
     if (!isModerator) return null;
     if (item?.result_status) {
-      return `${formatActionType(item.board_code)} ${formatActionType(
-        item.result_status
-      )}`;
+      return formatActionType(item.result_status);
     }
     if (item?.classification) {
-      const boardLabel = item?.proposal?.board_code || item?.board_code || "";
       const rankLabel = item.rank ? ` #${item.rank}` : "";
-      return `${formatActionType(boardLabel)} ${formatActionType(
-        item.classification
-      )}${rankLabel}`;
+      return `${formatActionType(item.classification)}${rankLabel}`;
     }
     if (item?.solution_proposal_id) return "Implementation";
     if (item?.flag_code) return formatActionType(item.severity || "review");
@@ -2352,9 +3055,7 @@ function App() {
   const selectedStateLabel =
     selectedProposal?.proposal?.primary_state || (selectedIsArchived ? "archived" : "active");
   const selectedIsAuthor =
-    selectedProposal?.proposal?.author_user_id && me?.user_id
-      ? selectedProposal.proposal.author_user_id === me.user_id
-      : false;
+    selectedProposal?.proposal?.current_user_is_author || false;
   const selectedAppealAlreadySubmitted = Boolean(
     selectedProposal?.moderator_actions?.some(
       (action) => action.action_type === "appeal_submission"
@@ -2385,26 +3086,31 @@ function App() {
       (unlockStatus?.completed_review_actions || 0);
 
   const currentBoardCode = getBoardForTab(activeTab);
-  const unlockProgress = unlockStatus
-    ? `${Math.min(
-        unlockStatus.completed_review_actions,
-        unlockStatus.required_review_actions
-      )}/${unlockStatus.required_review_actions}`
-    : "0/0";
-  const reviewUnlockDenominator =
-    (unlockStatus?.required_review_actions || 0) >= STANDARD_REQUIRED_REVIEW_COUNT
-      ? STANDARD_REQUIRED_REVIEW_COUNT
-      : unlockStatus?.required_review_actions || 0;
-  const reviewUnlockProgress = unlockStatus
-    ? `${Math.min(
-        unlockStatus.completed_review_actions,
-        reviewUnlockDenominator
-      )}/${reviewUnlockDenominator}`
-    : `0/${STANDARD_REQUIRED_REVIEW_COUNT}`;
-  const reviewUnlockMessage =
-    reviewUnlockDenominator > 0
-      ? `Complete ${reviewUnlockProgress} reviews to unlock voting.`
-      : "Voting unlocks automatically when no eligible reviews are available.";
+  const requiredReviewTotal = unlockStatus?.required_review_actions || 0;
+  const requiredReviewCompleted = Math.min(
+    unlockStatus?.completed_review_actions || 0,
+    requiredReviewTotal
+  );
+  const currentRequiredReviewNumber =
+    requiredReviewTotal > requiredReviewCompleted
+      ? requiredReviewCompleted + 1
+      : requiredReviewCompleted;
+  const unlockProgress =
+    requiredReviewTotal > 0
+      ? `Review ${currentRequiredReviewNumber}/${requiredReviewTotal}`
+      : "Review 0/0";
+  const requiredReviewRemainingAfterCurrent = Math.max(
+    requiredReviewTotal - currentRequiredReviewNumber,
+    0
+  );
+  const requiredReviewAvailabilityNote =
+    requiredReviewTotal > 0 && requiredReviewTotal < 4
+      ? `${requiredReviewTotal} available - ${
+          requiredReviewRemainingAfterCurrent === 0
+            ? "last one"
+            : `${requiredReviewRemainingAfterCurrent} left after this`
+        }`
+      : "";
   const canSubmitOnCurrentBoard =
     canParticipate &&
     (activeTab === "issues" || activeTab === "solutions") &&
@@ -2450,11 +3156,12 @@ function App() {
     Boolean(solutionTargetProposal);
   const detailDockLabel = showingSolutionSubmissionView ? "Issue" : selectedTitle;
   const showingAccountView = activeTab === "account";
-  const viewContextText = getViewContextText();
   const canSearchCurrentView = !openingPhaseLocked && items.length > 0;
   const visibleItems = searchQuery.trim()
     ? items.filter((item) => itemMatchesSearch(item, searchQuery))
     : items;
+  const sortedVisibleItems =
+    sortMode === "feed" ? visibleItems : [...visibleItems].sort(compareItemsBySort);
   const shouldSplitReviewedSubmissions =
     activeTab === "issues" || activeTab === "solutions";
   const reviewedBoardItemIds = new Set(
@@ -2464,20 +3171,61 @@ function App() {
     ).map((item) => item.id)
   );
   const unreviewedVisibleItems = shouldSplitReviewedSubmissions
-    ? visibleItems.filter((item) => !reviewedBoardItemIds.has(getItemId(item)))
-    : visibleItems;
-  const reviewedVisibleItems = shouldSplitReviewedSubmissions
-    ? visibleItems.filter((item) => reviewedBoardItemIds.has(getItemId(item)))
+    ? sortedVisibleItems.filter((item) => !reviewedBoardItemIds.has(getItemId(item)))
     : [];
+  const reviewedVisibleItems = shouldSplitReviewedSubmissions
+    ? sortedVisibleItems.filter((item) => reviewedBoardItemIds.has(getItemId(item)))
+    : [];
+  const groupedBoardItems =
+    shouldSplitReviewedSubmissions && feedPane === "reviewed"
+      ? reviewedVisibleItems
+      : unreviewedVisibleItems;
   const boardDisplayItems =
-    shouldSplitReviewedSubmissions && reviewedVisibleItems.length
-      ? [
-          ...unreviewedVisibleItems,
-          { section_marker: "reviewed_submissions" },
-          ...reviewedVisibleItems,
-        ]
-      : visibleItems;
+    shouldSplitReviewedSubmissions ? groupedBoardItems : sortedVisibleItems;
+  const postReviewTutorialIntroActive =
+    postReviewTutorialStep === POST_REVIEW_TUTORIAL_STEPS.REAL_SUBMISSIONS;
+  const postReviewTutorialVotingActive =
+    postReviewTutorialStep === POST_REVIEW_TUTORIAL_STEPS.UNLIMITED_VOTING;
+  const postReviewTutorialPickActive =
+    postReviewTutorialStep === POST_REVIEW_TUTORIAL_STEPS.PICK_SUBMISSION;
+  const postReviewTutorialDetailActive =
+    postReviewTutorialStep === POST_REVIEW_TUTORIAL_STEPS.DETAILS_OPENED;
+  const displayBoardItems =
+    postReviewTutorialPickActive &&
+    shouldSplitReviewedSubmissions &&
+    boardDisplayItems.length === 0
+      ? reviewedVisibleItems
+      : boardDisplayItems;
+  const postReviewTutorialTargetId =
+    postReviewTutorialPickActive &&
+    activeTab === getTabForBoard(postReviewTutorialBoard)
+      ? getItemId(displayBoardItems[0])
+      : "";
+  const showPostReviewIntroTutorial = postReviewTutorialIntroActive;
+  const showPostReviewVotingTutorial = postReviewTutorialVotingActive;
+  const showPostReviewPickTutorial =
+    postReviewTutorialPickActive && Boolean(postReviewTutorialTargetId);
+  const showPostReviewDetailTutorial = postReviewTutorialDetailActive;
+  const postReviewTutorialActive =
+    Boolean(postReviewTutorialStep) &&
+    (showPostReviewIntroTutorial ||
+      showPostReviewVotingTutorial ||
+      itemsLoading ||
+      showPostReviewPickTutorial ||
+      showPostReviewDetailTutorial);
+
   const navigationTabs = visibleTabs;
+  const currentSortOption =
+    SORT_OPTIONS.find((option) => option.value === sortMode) || SORT_OPTIONS[0];
+  const showFeedTable =
+    activeTab === "issues" || activeTab === "solutions" || activeTab === "archive";
+  const isSolutionsBoardUnavailable = !solutionTargetProposal;
+  const getTabUnavailableReason = (tabKey) => {
+    if (tabKey === "solutions" && isSolutionsBoardUnavailable) {
+      return "Solutions open after the previous cycle publishes a winning issue.";
+    }
+    return "";
+  };
   const primaryNavigationTabs = navigationTabs.filter((tab) =>
     PRIMARY_NAV_TAB_KEYS.has(tab.key)
   );
@@ -2503,6 +3251,7 @@ function App() {
   const canVoteOnSelected =
     canParticipate &&
     selectedProposal?.proposal &&
+    !selectedIsAuthor &&
     (selectedBoardCode === "issue" || selectedBoardCode === "solution") &&
     (selectedIsArchived
       ? unlockStatus?.archive_voting_unlocked
@@ -2524,6 +3273,18 @@ function App() {
     !selectedIsSolutionTargetIssue &&
     selectedProposal?.proposal &&
     (selectedBoardCode === "issue" || selectedBoardCode === "solution");
+  const showDiscussionPanel =
+    selectedProposal?.proposal &&
+    (selectedBoardCode === "issue" || selectedBoardCode === "solution");
+  const currentUserHasDiscussionComment = discussionComments.some(
+    (comment) => comment.current_user_comment
+  );
+  const canPostDiscussionComment =
+    showDiscussionPanel &&
+    canParticipate &&
+    !selectedIsArchived &&
+    unlockStatus?.review_unlocked &&
+    !currentUserHasDiscussionComment;
   const mergeVoteOptions = (
     selectedBoardCode === "solution" ? solutionOptions : issueOptions
   ).filter(
@@ -2540,9 +3301,10 @@ function App() {
             <button
               key={option.value}
               type="button"
-              className={
-                selectedSentimentVote === option.value ? "active-choice" : ""
-              }
+              className={getVoteButtonClassName(
+                option.value,
+                selectedSentimentVote
+              )}
               onClick={() =>
                 handleSubmitReviewAction(
                   selectedProposal.proposal.id,
@@ -2565,22 +3327,52 @@ function App() {
         <p className="muted">
           Your own proposal does not count toward required reviews.
         </p>
-      ) : (
-        <p className="muted">Review vote credited for this proposal.</p>
-      )}
+      ) : null}
 
-      <h4>Your Sentiment Vote</h4>
       {!canVoteOnSelected ? (
         <p className="muted">
-          {selectedIsArchived
+          {selectedIsAuthor
+            ? "You cannot vote on your own proposal."
+            : selectedIsArchived
             ? "Archive voting unlocks after required reviews are complete."
             : unlockStatus?.voting_open
               ? "Voting unlocks after required reviews are complete."
               : "Voting is closed for this cycle."}
         </p>
       ) : (
+        <div className="vote-grid primary-vote-grid">
+          {VOTE_OPTIONS.filter((option) => PRIMARY_VOTE_VALUES.has(option.value)).map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              className={getVoteButtonClassName(
+                option.value,
+                selectedSentimentVote
+              )}
+              onClick={() => handleSentimentVote(option.value)}
+              disabled={voteLoading}
+            >
+              {getVoteOptionLabel(option, selectedBoardCode)}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {voteError ? <div className="error-box">{voteError}</div> : null}
+      {voteSuccess ? <div className="success-box">{voteSuccess}</div> : null}
+      {reviewActionError ? (
+        <div className="error-box">{reviewActionError}</div>
+      ) : null}
+    </div>
+  ) : null;
+
+  const flagSubmissionPanel = showPersonalReviewControls ? (
+    <details className="more-info-panel flag-submission-panel">
+      <summary>Flag Submission</summary>
+
+      {canVoteOnSelected ? (
         <div className="vote-grid">
-          {VOTE_OPTIONS.map((option) => (
+          {VOTE_OPTIONS.filter((option) => FLAG_VOTE_VALUES.has(option.value)).map((option) => (
             <button
               key={option.value}
               type="button"
@@ -2592,11 +3384,10 @@ function App() {
             </button>
           ))}
         </div>
-      )}
+      ) : null}
 
       {!selectedIsArchived ? (
-        <>
-          <h4>Possible Duplicate</h4>
+        <div className="flag-duplicate-panel">
           {!canMergeVoteOnSelected ? (
             <p className="muted">
               {selectedIsAuthor
@@ -2607,9 +3398,6 @@ function App() {
             </p>
           ) : (
             <>
-              <p className="muted small-muted">
-                This submission ID: <code>{selectedProposal.proposal.id}</code>
-              </p>
               <label className="moderation-field">
                 Related Submission ID
                 <input
@@ -2645,19 +3433,209 @@ function App() {
               </button>
             </>
           )}
-        </>
+        </div>
+      ) : null}
+    </details>
+  ) : null;
+
+  const discussionPanel = showDiscussionPanel ? (
+    <details className="more-info-panel discussion-panel">
+      <summary>Discussion</summary>
+
+      {discussionError ? <div className="error-box">{discussionError}</div> : null}
+
+      {canPostDiscussionComment ? (
+        <form className="discussion-form" onSubmit={handleSubmitDiscussionComment}>
+          <textarea
+            value={discussionBody}
+            onChange={(event) => setDiscussionBody(event.target.value)}
+            maxLength={MAX_COMMENT_CHARS}
+            rows={3}
+            placeholder="Add one comment"
+            required
+          />
+          <button
+            type="submit"
+            disabled={discussionSubmitting || !discussionBody.trim()}
+          >
+            {discussionSubmitting ? "Posting..." : "Post"}
+          </button>
+        </form>
+      ) : (
+        <p className="muted discussion-note">
+          {currentUserHasDiscussionComment
+            ? "One comment per submission."
+            : selectedIsArchived
+              ? "Discussion is closed."
+              : canParticipate
+                ? "Discussion opens after review unlock."
+                : "Verify your email to comment."}
+        </p>
+      )}
+
+      {discussionLoading ? <p className="muted">Loading discussion...</p> : null}
+
+      {!discussionLoading && discussionComments.length === 0 ? (
+        <p className="muted discussion-note">No comments yet.</p>
       ) : null}
 
-      {voteError ? <div className="error-box">{voteError}</div> : null}
-      {voteSuccess ? <div className="success-box">{voteSuccess}</div> : null}
-      {reviewActionError ? (
-        <div className="error-box">{reviewActionError}</div>
+      {discussionComments.length ? (
+        <div className="discussion-list">
+          {discussionComments.map((comment) => (
+            <article className="discussion-comment" key={comment.id}>
+              {comment.author_label ? (
+                <span className="state-pill subtle-pill discussion-author-pill">
+                  {comment.author_label}
+                </span>
+              ) : null}
+              <p>{comment.body}</p>
+              <div className="discussion-vote-row">
+                <button
+                  type="button"
+                  className={comment.current_user_vote === "like" ? "active-choice" : ""}
+                  onClick={() => handleDiscussionVote(comment.id, "like")}
+                  disabled={
+                    discussionVotingId === comment.id ||
+                    selectedIsArchived ||
+                    !canParticipate ||
+                    !unlockStatus?.review_unlocked
+                  }
+                >
+                  Like
+                </button>
+                <button
+                  type="button"
+                  className={
+                    comment.current_user_vote === "dislike" ? "active-choice" : ""
+                  }
+                  onClick={() => handleDiscussionVote(comment.id, "dislike")}
+                  disabled={
+                    discussionVotingId === comment.id ||
+                    selectedIsArchived ||
+                    !canParticipate ||
+                    !unlockStatus?.review_unlocked
+                  }
+                >
+                  Dislike
+                </button>
+              </div>
+            </article>
+          ))}
+        </div>
       ) : null}
-      {reviewActionSuccess ? (
-        <div className="success-box">{reviewActionSuccess}</div>
-      ) : null}
-    </div>
+    </details>
   ) : null;
+
+  function renderSubmissionPreview(boardCode) {
+    const isSolution = boardCode === "solution";
+    const title = isSolution ? solutionForm.title : issueForm.title;
+    const previewResourceEntries = isSolution
+      ? asArray(solutionForm.executionTrackingEntries)
+          .map(normalizeExecutionEntry)
+          .map((entry) => ({
+            ...entry,
+            target_needed: buildTargetNeeded(entry),
+          }))
+          .filter((entry) => entry.target_needed)
+      : [];
+    const previewCriteria = isSolution
+      ? asArray(solutionForm.completionCriteria)
+          .map(normalizeCompletionCriterion)
+          .filter((criterion) => criterion.criterion_description.trim())
+      : [];
+    const resourceCategories = previewResourceEntries.length
+      ? getRequiredResourceCategories(previewResourceEntries)
+      : [];
+
+    return (
+      <section className="submission-preview-card" aria-live="polite">
+        <span className="submission-preview-kicker">Review Before Posting</span>
+
+        {isSolution && solutionTargetProposal ? (
+          <div className="submission-preview-target">
+            <span>Solving</span>
+            <strong>{solutionTargetProposal.title}</strong>
+          </div>
+        ) : null}
+
+        <h3 className="proposal-detail-title submission-preview-title">
+          {title.trim() || "Untitled submission"}
+        </h3>
+
+        <div className="proposal-detail-story submission-preview-story">
+          {isSolution ? (
+            <>
+              <section className="proposal-detail-section proposal-detail-section-primary">
+                <h4>Action Description</h4>
+                <p>{solutionForm.actionDescription.trim()}</p>
+              </section>
+              <section className="proposal-detail-section">
+                <h4>Why This Solves It</h4>
+                <p>{solutionForm.whyThisSolvesIt.trim()}</p>
+              </section>
+            </>
+          ) : (
+            <>
+              <section className="proposal-detail-section proposal-detail-section-primary">
+                <h4>Problem Description</h4>
+                <p>{issueForm.problemDescription.trim()}</p>
+              </section>
+              <section className="proposal-detail-section">
+                <h4>Affected Scope</h4>
+                <p>{issueForm.affectedScope.trim()}</p>
+              </section>
+              <section className="proposal-detail-section">
+                <h4>Why It Matters</h4>
+                <p>{issueForm.whyItMatters.trim()}</p>
+              </section>
+            </>
+          )}
+        </div>
+
+        {resourceCategories.length ? (
+          <div className="submission-preview-meta">
+            <strong>Required Resources</strong>
+            <div className="proposal-badge-stack">
+              {resourceCategories.map((category) => (
+                <span className="state-pill subtle-pill" key={category}>
+                  {formatResourceCategory(category)}
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {previewCriteria.length ? (
+          <div className="submission-preview-list">
+            <strong>Completion Criteria</strong>
+            {previewCriteria.map((criterion, index) => (
+              <div className="relationship-card" key={`preview-criterion-${index}`}>
+                {criterion.criterion_description}
+              </div>
+            ))}
+          </div>
+        ) : null}
+
+        {previewResourceEntries.length ? (
+          <div className="submission-preview-list">
+            <strong>Resource Details</strong>
+            {previewResourceEntries.map((entry, index) => (
+              <div className="relationship-card" key={`preview-resource-${index}`}>
+                <div className="resource-card-header">
+                  <strong>{formatResourceCategory(entry.resource_category)}</strong>
+                </div>
+                <p>{entry.target_needed}</p>
+              </div>
+            ))}
+          </div>
+        ) : null}
+
+        <p className="muted submission-preview-note">
+          If this looks right, confirm below.
+        </p>
+      </section>
+    );
+  }
 
   const selectedOutgoingRelationships =
     selectedProposal?.merge_relationships?.outgoing || [];
@@ -2810,13 +3788,140 @@ function App() {
     isModerator && selectedProposal?.proposal
       ? getThresholdCountSummary(selectedProposal.proposal)
       : null;
+  const activeTutorialStep =
+    TUTORIAL_STEPS[Math.min(tutorialStep, TUTORIAL_STEPS.length - 1)];
+  const activeTutorialBody = activeTutorialStep.body.replace(
+    "{locale}",
+    getActiveLocaleSentenceLabel()
+  );
+  const brandName = formatLocaleForBrand(activeLocaleName);
+  const isWorldLocale =
+    activeLocaleName.trim().toLowerCase() === DEFAULT_LOCALE_NAME.toLowerCase();
+  const patreonUrl = isWorldLocale
+    ? CONFIGURED_PATREON_URL || WORLD_PATREON_URL
+    : "";
+  const patreonLabel =
+    CONFIGURED_PATREON_LABEL || "Buy the creator a coffee ☕";
+  const sourceRepositoryUrl =
+    sourceInfo?.source_repository_url || DEFAULT_SOURCE_REPOSITORY_URL;
+  const licenseUrl = sourceInfo?.license?.url || AGPL_LICENSE_URL;
+  const buildProvenanceUrl = api.publicUrl("/.well-known/keystone-build.json");
+  const localeRegistryUrl = api.publicUrl("/.well-known/keystone-locales.json");
+  const buildLabel =
+    buildProvenance?.release_id ||
+    (buildProvenance?.git_commit_sha
+      ? buildProvenance.git_commit_sha.slice(0, 12)
+      : "development");
+  const deploymentStatusLabel =
+    buildProvenance?.deployment_status || sourceInfo?.deployment_status || "development";
+  const registryStatusLabel =
+    buildProvenance?.registry_status ||
+    localeRegistry?.entries?.[0]?.registry_status ||
+    sourceInfo?.registry_status ||
+    deploymentStatusLabel;
+  const trustTierLabel =
+    buildProvenance?.trust_tier || localeRegistry?.entries?.[0]?.trust_tier || "development";
+  const signatureStatusLabel =
+    buildProvenance?.signature_status === "signed" ? "Signed" : "Unsigned";
+  const localeDirectoryEntries = (localeRegistry?.entries || []).filter(
+    (entry) => entry?.locale?.name && entry?.web_origin
+  );
+  const showLocaleDirectory = localeDirectoryEntries.length > 1;
+
+  function renderLocaleDirectory() {
+    if (!showLocaleDirectory) return null;
+
+    return (
+      <div className="locale-directory-panel">
+        <div className="tool-section-header">
+          <h3>Locales</h3>
+        </div>
+        <div className="locale-directory-list">
+          {localeDirectoryEntries.map((entry) => (
+            <a
+              key={`${entry.locale.slug}:${entry.web_origin}`}
+              href={entry.web_origin}
+              target="_blank"
+              rel="noreferrer"
+            >
+              <strong>{entry.locale.name} Keystone</strong>
+              <span>{entry.registry_status || "unverified"}</span>
+            </a>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  function renderSourceInfoLinks() {
+    return (
+      <div className="source-license-strip">
+        <a href={sourceRepositoryUrl} target="_blank" rel="noreferrer">
+          Source
+        </a>
+        <a href={licenseUrl} target="_blank" rel="noreferrer">
+          AGPL
+        </a>
+        <a href={buildProvenanceUrl} target="_blank" rel="noreferrer">
+          Build Info
+        </a>
+        <a href={localeRegistryUrl} target="_blank" rel="noreferrer">
+          Registry
+        </a>
+      </div>
+    );
+  }
+
+  function renderVerificationPanel() {
+    return (
+      <section className="panel verification-panel">
+        <div className="tool-section-header">
+          <h2>Email Verification</h2>
+          <span className="state-pill subtle-pill">Required</span>
+        </div>
+
+        <form className="proposal-form" onSubmit={handleVerifyEmail}>
+          <label>
+            Verification Token
+            <input
+              value={verificationToken}
+              onChange={(event) => setVerificationToken(event.target.value)}
+              maxLength={MAX_TOKEN_CHARS}
+              required
+            />
+          </label>
+
+          {verificationError ? (
+            <div className="error-box">{verificationError}</div>
+          ) : null}
+          {verificationSuccess ? (
+            <div className="success-box">{verificationSuccess}</div>
+          ) : null}
+
+          <div className="action-row">
+            <button type="submit" disabled={verificationLoading}>
+              {verificationLoading ? "Verifying..." : "Verify Email"}
+            </button>
+            <button
+              type="button"
+              onClick={handleRequestVerificationToken}
+              disabled={verificationLoading}
+            >
+              Send Verification
+            </button>
+          </div>
+        </form>
+      </section>
+    );
+  }
 
   if (!sessionChecked) {
     return (
       <div className="app-shell">
         <div className="auth-card">
-          <h1>Keystone</h1>
+          <h1>{brandName}</h1>
           <p className="muted">Checking session...</p>
+          {renderSourceInfoLinks()}
         </div>
       </div>
     );
@@ -2826,27 +3931,19 @@ function App() {
     return (
       <div className="app-shell">
         <div className="auth-card">
-          <h1>Keystone</h1>
+          <h1>{brandName}</h1>
 
           <div className="auth-toggle">
             <button
               className={authMode === "login" ? "active" : ""}
-              onClick={() => {
-                setAuthMode("login");
-                setAuthError("");
-                setAuthSuccess("");
-              }}
+              onClick={() => switchAuthMode("login")}
               type="button"
             >
               Login
             </button>
             <button
               className={authMode === "register" ? "active" : ""}
-              onClick={() => {
-                setAuthMode("register");
-                setAuthError("");
-                setAuthSuccess("");
-              }}
+              onClick={() => switchAuthMode("register")}
               type="button"
             >
               Register
@@ -2880,6 +3977,19 @@ function App() {
               </label>
             ) : null}
 
+            {authMode === "register" ? (
+              <label>
+                Confirm Password
+                <input
+                  type="password"
+                  value={confirmPassword}
+                  onChange={(event) => setConfirmPassword(event.target.value)}
+                  maxLength={MAX_PASSWORD_CHARS}
+                  required
+                />
+              </label>
+            ) : null}
+
             {authMode === "resetConfirm" ? (
               <>
                 <label>
@@ -2904,7 +4014,30 @@ function App() {
                     required
                   />
                 </label>
+
+                <label>
+                  Confirm New Password
+                  <input
+                    type="password"
+                    value={passwordResetConfirmPassword}
+                    onChange={(event) =>
+                      setPasswordResetConfirmPassword(event.target.value)
+                    }
+                    maxLength={MAX_PASSWORD_CHARS}
+                    required
+                  />
+                </label>
               </>
+            ) : null}
+
+            {TURNSTILE_SITE_KEY &&
+            (authMode === "register" || authMode === "resetRequest") ? (
+              <TurnstileWidget
+                action={authMode === "register" ? "register" : "password_reset"}
+                resetKey={turnstileWidgetResetKey}
+                siteKey={TURNSTILE_SITE_KEY}
+                onToken={setTurnstileToken}
+              />
             ) : null}
 
             {authError ? <div className="error-box">{authError}</div> : null}
@@ -2926,23 +4059,31 @@ function App() {
               {authMode === "login" ? (
                 <button
                   type="button"
-                  onClick={() => {
-                    setAuthMode("resetRequest");
-                    setAuthError("");
-                    setAuthSuccess("");
-                  }}
+                  onClick={() => switchAuthMode("resetRequest")}
                 >
                   Forgot password?
+                </button>
+              ) : null}
+              {authMode === "resetRequest" ? (
+                <button
+                  type="button"
+                  onClick={() => switchAuthMode("resetConfirm")}
+                >
+                  I have a reset token
+                </button>
+              ) : null}
+              {authMode === "resetConfirm" ? (
+                <button
+                  type="button"
+                  onClick={() => switchAuthMode("resetRequest")}
+                >
+                  Request reset
                 </button>
               ) : null}
               {authMode === "resetRequest" || authMode === "resetConfirm" ? (
                 <button
                   type="button"
-                  onClick={() => {
-                    setAuthMode("login");
-                    setAuthError("");
-                    setAuthSuccess("");
-                  }}
+                  onClick={() => switchAuthMode("login")}
                 >
                   Back to login
                 </button>
@@ -2969,16 +4110,38 @@ function App() {
               <p className="muted small-muted">Password: {PROTOTYPE_PASSWORD}</p>
             </div>
           ) : null}
+
+          {renderSourceInfoLinks()}
+          {renderLocaleDirectory()}
+        </div>
+      </div>
+    );
+  }
+
+  if (!me.email_verified) {
+    return (
+      <div className="app-shell app-shell-verification">
+        <div className="verification-gate">
+          <h1>{brandName}</h1>
+          {renderVerificationPanel()}
         </div>
       </div>
     );
   }
 
   return (
-    <div className="app-shell app-shell-board">
+    <div
+      className={`app-shell app-shell-board ${
+        tutorialOpen ? `tutorial-active tutorial-highlight-${activeTutorialStep.highlightTab}` : ""
+      } ${
+        postReviewTutorialActive
+          ? `post-review-tutorial-active post-review-tutorial-${postReviewTutorialStep}`
+          : ""
+      }`}
+    >
       <header className="topbar">
         <div>
-          <h1>Keystone</h1>
+          <h1>{brandName}</h1>
         </div>
       </header>
 
@@ -2986,12 +4149,11 @@ function App() {
         <div className="intro-backdrop" role="dialog" aria-modal="true">
           <section className="intro-panel">
             <div className="tool-section-header">
-              <h2>Welcome to Keystone</h2>
-              <span className="state-pill subtle-pill">Quick intro</span>
+              <h2>Welcome to {brandName}</h2>
             </div>
             <p className="muted">
-              Each month is one active cycle. Submit, review, vote, and flag
-              duplicates during that cycle; winners are published at closeout.
+              Each month, vote on important issues, as well as the best solution
+              to the previous month's winning issue.
             </p>
             <div className="intro-grid">
               {INTRO_ITEMS.filter((item) => !item.moderatorOnly || isModerator).map(
@@ -3004,10 +4166,10 @@ function App() {
               )}
             </div>
             <div className="action-row">
-              <button type="button" onClick={handleCloseIntro}>
-                Got It
+              <button type="button" onClick={handleIntroNext}>
+                Next
               </button>
-              <button type="button" className="quiet-button" onClick={handleCloseIntro}>
+              <button type="button" className="quiet-button" onClick={handleSkipIntro}>
                 Skip
               </button>
             </div>
@@ -3015,45 +4177,110 @@ function App() {
         </div>
       ) : null}
 
-      {!me.email_verified ? (
-        <section className="panel verification-panel">
-          <div className="tool-section-header">
-            <h2>Email Verification</h2>
-            <span className="state-pill subtle-pill">Required</span>
-          </div>
-
-          <form className="proposal-form" onSubmit={handleVerifyEmail}>
-            <label>
-              Verification Token
-              <input
-                value={verificationToken}
-                onChange={(event) => setVerificationToken(event.target.value)}
-                maxLength={MAX_TOKEN_CHARS}
-                required
-              />
-            </label>
-
-            {verificationError ? (
-              <div className="error-box">{verificationError}</div>
-            ) : null}
-            {verificationSuccess ? (
-              <div className="success-box">{verificationSuccess}</div>
-            ) : null}
-
+      {tutorialOpen ? (
+        <>
+          <div className="tutorial-focus-scrim" aria-hidden="true" />
+          <section
+            className="tutorial-callout"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="tutorial-heading"
+          >
+            <div className="tutorial-copy" key={tutorialStep}>
+              <p className="muted small-muted">
+                Step {tutorialStep + 1} of {TUTORIAL_STEPS.length}
+              </p>
+              <h2 id="tutorial-heading">{activeTutorialStep.title}</h2>
+              <p>{activeTutorialBody}</p>
+              <div className="tutorial-dots" aria-hidden="true">
+                {TUTORIAL_STEPS.map((step, index) => (
+                  <span
+                    className={
+                      index === tutorialStep ? "tutorial-dot active" : "tutorial-dot"
+                    }
+                    key={step.title}
+                  />
+                ))}
+              </div>
+            </div>
             <div className="action-row">
-              <button type="submit" disabled={verificationLoading}>
-                {verificationLoading ? "Verifying..." : "Verify Email"}
+              <button
+                type="button"
+                onClick={handleTutorialBack}
+                disabled={tutorialStep === 0}
+              >
+                Back
+              </button>
+              <button type="button" onClick={handleTutorialNext}>
+                {tutorialStep >= TUTORIAL_STEPS.length - 1 ? "Finish" : "Next"}
               </button>
               <button
                 type="button"
-                onClick={handleRequestVerificationToken}
-                disabled={verificationLoading}
+                className="quiet-button"
+                onClick={handleSkipTutorial}
               >
-                Send Verification
+                Skip
               </button>
             </div>
-          </form>
-        </section>
+          </section>
+        </>
+      ) : null}
+
+      {showPostReviewIntroTutorial ? (
+        <button
+          type="button"
+          className="post-review-tutorial-dismiss-layer post-review-tutorial-intro-layer"
+          onClick={handlePostReviewTutorialIntroClick}
+          aria-label="Continue post-review tutorial"
+        >
+          <span className="post-review-tutorial-callout post-review-tutorial-callout-intro">
+            These are real submissions, by real people.
+          </span>
+        </button>
+      ) : null}
+
+      {showPostReviewVotingTutorial ? (
+        <button
+          type="button"
+          className="post-review-tutorial-dismiss-layer post-review-tutorial-intro-layer"
+          onClick={handlePostReviewTutorialVotingClick}
+          aria-label="Continue post-review tutorial"
+        >
+          <span className="post-review-tutorial-callout post-review-tutorial-callout-intro">
+            Voting is unlimited, so please vote on as many submissions as you can.
+          </span>
+        </button>
+      ) : null}
+
+      {showPostReviewPickTutorial ? (
+        <>
+          <div className="post-review-tutorial-scrim" aria-hidden="true" />
+          <section
+            className="post-review-tutorial-callout post-review-tutorial-callout-list"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="post-review-tutorial-heading"
+          >
+            <h2 id="post-review-tutorial-heading">Please click this one and open it.</h2>
+          </section>
+        </>
+      ) : null}
+
+      {showPostReviewDetailTutorial ? (
+        <button
+          type="button"
+          className="post-review-tutorial-dismiss-layer post-review-tutorial-detail-layer"
+          onClick={finishPostReviewTutorial}
+          onKeyDown={handlePostReviewTutorialDetailKeyDown}
+          onTouchMove={handlePostReviewTutorialDetailTouchMove}
+          onTouchStart={handlePostReviewTutorialDetailTouchStart}
+          onWheel={handlePostReviewTutorialDetailWheel}
+          aria-label="Close post-review tutorial"
+        >
+          <span className="post-review-tutorial-callout post-review-tutorial-callout-detail">
+            Scroll down to vote, discuss or flag this submission
+          </span>
+        </button>
       ) : null}
 
       <main className="board-layout">
@@ -3065,9 +4292,6 @@ function App() {
           }`}
         >
           <div className="panel-header">
-            {needsRequiredReview ? (
-              <p className="muted review-unlock-message">{reviewUnlockMessage}</p>
-            ) : null}
             <h2
               className={
                 !showingSubmissionView &&
@@ -3086,8 +4310,13 @@ function App() {
               activeTab === "solutions" ||
               activeTab === "reviewPool") &&
             needsRequiredReview ? (
-              <div className="proposal-badge-stack">
+              <div className="proposal-badge-stack review-progress-stack">
                 <span className="state-pill subtle-pill">{unlockProgress}</span>
+                {requiredReviewAvailabilityNote ? (
+                  <span className="review-progress-note">
+                    {requiredReviewAvailabilityNote}
+                  </span>
+                ) : null}
               </div>
             ) : null}
             {showingSolutionSubmissionView && solutionTargetProposal ? (
@@ -3100,27 +4329,57 @@ function App() {
             !showingAccountView &&
             canSearchCurrentView &&
             !showingSubmissionView ? (
-              <div className="panel-actions">
+              <div className="panel-actions feed-tool-actions">
                 <button
                   type="button"
+                  className={`icon-tool-button ${searchPanelOpen ? "active" : ""}`}
+                  aria-label={searchPanelOpen ? "Close search" : "Open search"}
+                  title={searchPanelOpen ? "Close search" : "Search"}
                   onClick={() => {
                     setSubmissionPanelOpen(false);
                     setSearchPanelOpen((current) => !current);
+                    setSortPanelOpen(false);
                   }}
                 >
-                  {searchPanelOpen ? "Close Search" : "Search"}
+                  <SearchIcon />
                 </button>
+                <div className="sort-menu-wrap">
+                  <button
+                    type="button"
+                    className={`icon-tool-button ${sortPanelOpen ? "active" : ""}`}
+                    aria-label="Open sort options"
+                    aria-expanded={sortPanelOpen}
+                    title={`Sort: ${currentSortOption.label}`}
+                    onClick={() => {
+                      setSortPanelOpen((current) => !current);
+                      setSearchPanelOpen(false);
+                    }}
+                  >
+                    <SortIcon />
+                  </button>
+                  {sortPanelOpen ? (
+                    <div className="sort-menu" role="menu">
+                      {SORT_OPTIONS.map((option) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          className={sortMode === option.value ? "active" : ""}
+                          onClick={() => {
+                            setSortMode(option.value);
+                            setSortPanelOpen(false);
+                          }}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
               </div>
             ) : null}
           </div>
 
           {unlockError ? <div className="error-box">{unlockError}</div> : null}
-
-          {viewContextText ? (
-            <div className="view-context-card">
-              <p>{viewContextText}</p>
-            </div>
-          ) : null}
 
           {showingAccountView ? (
             <section className="tool-section account-panel">
@@ -3129,13 +4388,62 @@ function App() {
                 <span>{formatRoleLabel(me.role_code)}</span>
               </div>
 
-              <button type="button" onClick={handleLogout}>
-                Logout
-              </button>
+              <div className="settings-menu">
+                <button type="button" onClick={handleLogout}>
+                  Logout
+                </button>
 
-              <button type="button" onClick={handleShowIntro}>
-                Show Intro
-              </button>
+                <button type="button" onClick={handleShowIntro}>
+                  Show Intro
+                </button>
+
+                {patreonUrl ? (
+                  <a
+                    className="patreon-link"
+                    href={patreonUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {patreonLabel}
+                  </a>
+                ) : null}
+              </div>
+
+              <div className="source-info-panel">
+                <div className="tool-section-header">
+                  <h3>Source & Build</h3>
+                  <span className="state-pill subtle-pill">
+                    {signatureStatusLabel}
+                  </span>
+                </div>
+                <div className="source-info-grid">
+                  <div>
+                    <strong>Release</strong>
+                    <span>{buildLabel}</span>
+                  </div>
+                  <div>
+                    <strong>Status</strong>
+                    <span>{deploymentStatusLabel}</span>
+                  </div>
+                  <div>
+                    <strong>Registry</strong>
+                    <span>{registryStatusLabel}</span>
+                  </div>
+                  <div>
+                    <strong>Trust</strong>
+                    <span>{trustTierLabel}</span>
+                  </div>
+                  <div>
+                    <strong>Locale</strong>
+                    <span>{buildProvenance?.locale?.name || activeLocaleName}</span>
+                  </div>
+                </div>
+                {renderSourceInfoLinks()}
+                {renderLocaleDirectory()}
+                {sourceInfoError ? (
+                  <p className="muted small-muted">{sourceInfoError}</p>
+                ) : null}
+              </div>
 
               <p className="muted small-muted">
                 Full manual: docs/user-manual.md
@@ -3144,23 +4452,26 @@ function App() {
           ) : null}
 
           {!openingPhaseLocked && !showingSubmissionView && searchPanelOpen ? (
-            <div className="tool-section">
-              <label className="moderation-field">
-                Search This View
+            <div className="feed-search-panel">
+              <label>
+                <SearchIcon />
                 <input
                   value={searchQuery}
                   onChange={(event) => setSearchQuery(event.target.value)}
                   maxLength={MAX_SEARCH_CHARS}
-                  placeholder="Search titles and descriptions"
+                  autoFocus
+                  placeholder="Search"
                 />
               </label>
             </div>
           ) : null}
 
-          {!showingSubmissionView && activeTab === "solutions" && solutionTargetProposal ? (
+          {!showingSubmissionView &&
+          (activeTab === "solutions" ||
+            (activeTab === "reviewPool" && requiredReviewBoard === "solution")) &&
+          solutionTargetProposal ? (
             <div className="solution-target-card">
-              <span className="state-pill solution-target-pill">Problem Being Solved</span>
-              <strong>{solutionTargetProposal.title}</strong>
+            <strong>{solutionTargetProposal.title}</strong>
             </div>
           ) : null}
 
@@ -3221,9 +4532,34 @@ function App() {
                     />
                   </label>
 
-                  <button type="submit" disabled={!canSubmitOnCurrentBoard || submitLoading}>
-                    {submitLoading ? "Submitting..." : "Submit Issue"}
-                  </button>
+                  {submissionPreviewMode === "issue" ? (
+                    <>
+                      {renderSubmissionPreview("issue")}
+                      <div className="submission-confirm-row">
+                        <button
+                          type="button"
+                          className="quiet-button"
+                          onClick={() => setSubmissionPreviewMode("")}
+                          disabled={submitLoading}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="submit"
+                          disabled={!canSubmitOnCurrentBoard || submitLoading}
+                        >
+                          {submitLoading ? "Submitting..." : "Confirm Issue"}
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <button
+                      type="submit"
+                      disabled={!canSubmitOnCurrentBoard || submitLoading}
+                    >
+                      Preview Issue
+                    </button>
+                  )}
                 </form>
               ) : (
                 <form
@@ -3481,12 +4817,34 @@ function App() {
                     </div>
                   </fieldset>
 
-                  <button
-                    type="submit"
-                    disabled={!canSubmitSolutionOnCurrentBoard || submitLoading}
-                  >
-                    {submitLoading ? "Submitting..." : "Submit Solution"}
-                  </button>
+                  {submissionPreviewMode === "solution" ? (
+                    <>
+                      {renderSubmissionPreview("solution")}
+                      <div className="submission-confirm-row">
+                        <button
+                          type="button"
+                          className="quiet-button"
+                          onClick={() => setSubmissionPreviewMode("")}
+                          disabled={submitLoading}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="submit"
+                          disabled={!canSubmitSolutionOnCurrentBoard || submitLoading}
+                        >
+                          {submitLoading ? "Submitting..." : "Confirm Solution"}
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <button
+                      type="submit"
+                      disabled={!canSubmitSolutionOnCurrentBoard || submitLoading}
+                    >
+                      Preview Solution
+                    </button>
+                  )}
                 </form>
               )}
 
@@ -3549,6 +4907,34 @@ function App() {
           {!showingSubmissionView && !showingAccountView && itemsLoading ? <p>Loading...</p> : null}
           {!showingSubmissionView && !showingAccountView && itemsError ? <div className="error-box">{itemsError}</div> : null}
 
+          {!showingSubmissionView &&
+          !showingAccountView &&
+          shouldSplitReviewedSubmissions &&
+          !itemsLoading &&
+          !itemsError &&
+          items.length > 0 ? (
+            <div className="feed-pane-tabs" role="tablist" aria-label="Submission groups">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={feedPane === "unreviewed"}
+                className={feedPane === "unreviewed" ? "active" : ""}
+                onClick={() => handleFeedPaneChange("unreviewed")}
+              >
+                Feed
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={feedPane === "reviewed"}
+                className={feedPane === "reviewed" ? "active" : ""}
+                onClick={() => handleFeedPaneChange("reviewed")}
+              >
+                Reviewed
+              </button>
+            </div>
+          ) : null}
+
           {!showingSubmissionView && !showingAccountView && !itemsLoading && !itemsError && items.length === 0 ? (
             <p className="muted">
               {getEmptyStateText()}
@@ -3557,21 +4943,103 @@ function App() {
           {!showingSubmissionView && !showingAccountView && !itemsLoading && !itemsError && items.length > 0 && visibleItems.length === 0 ? (
             <p className="muted">No matches found.</p>
           ) : null}
+          {!showingSubmissionView &&
+          !showingAccountView &&
+          !itemsLoading &&
+          !itemsError &&
+          shouldSplitReviewedSubmissions &&
+          visibleItems.length > 0 &&
+          displayBoardItems.length === 0 ? (
+            <p className="muted">
+              {feedPane === "reviewed"
+                ? "No reviewed submissions here yet."
+                : "No unreviewed submissions here yet."}
+            </p>
+          ) : null}
 
-          {!showingSubmissionView && !showingAccountView ? (
+          {!showingSubmissionView &&
+          !showingAccountView &&
+          showFeedTable &&
+          displayBoardItems.length > 0 ? (
+            <div className="submission-table-wrap">
+              <table className="submission-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Submission</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {displayBoardItems.map((item) => {
+                    const id = getItemId(item);
+                    const isReviewedBoardItem =
+                      shouldSplitReviewedSubmissions && reviewedBoardItemIds.has(id);
+                    const publicStateLabel = getPublicStateLabel(item);
+                    const reviewedVoteValue =
+                      localSentimentVotes[id] ||
+                      findPersonalProposal(id)?.current_user_sentiment_vote ||
+                      "";
+                    const reviewedVoteClass =
+                      feedPane === "reviewed" && reviewedVoteValue === "support"
+                        ? "submission-row-vote-support"
+                        : feedPane === "reviewed" && reviewedVoteValue === "not_a_fit"
+                          ? "submission-row-vote-pass"
+                          : "";
+                    const isPostReviewTutorialTarget =
+                      showPostReviewPickTutorial &&
+                      id === postReviewTutorialTargetId;
+
+                    return (
+                      <tr
+                        key={item?.appeal_id || item?.reconsideration_id || id}
+                        className={`${
+                          shouldSplitReviewedSubmissions && !isReviewedBoardItem
+                            ? "submission-row-unreviewed"
+                            : ""
+                        } ${
+                          selectedProposal?.proposal?.id === id
+                            ? "submission-row-selected"
+                            : ""
+                        } ${
+                          advancingFromSubmissionId === id
+                            ? "submission-row-shrinking"
+                            : ""
+                        } ${
+                          advancingToSubmissionId === id
+                            ? "submission-row-advance-target"
+                            : ""
+                        } ${
+                          isPostReviewTutorialTarget
+                            ? "post-review-tutorial-target-row"
+                            : ""
+                        } ${reviewedVoteClass}`}
+                      >
+                        <td>
+                          <button
+                            type="button"
+                            className={`submission-title-button ${
+                              isPostReviewTutorialTarget
+                                ? "post-review-tutorial-target-control"
+                                : ""
+                            }`}
+                            onClick={() => handleSelectProposal(id)}
+                          >
+                            <span>{getItemTitle(item)}</span>
+                            {publicStateLabel ? (
+                              <small>{publicStateLabel}</small>
+                            ) : null}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+
+          {!showingSubmissionView && !showingAccountView && !showFeedTable ? (
           <div className="proposal-list">
             {boardDisplayItems.map((item) => {
-              if (item?.section_marker === "reviewed_submissions") {
-                return (
-                  <div
-                    className="board-section-heading"
-                    key="reviewed-submissions-heading"
-                  >
-                    <h3>Reviewed Submissions</h3>
-                  </div>
-                );
-              }
-
               const id = getItemId(item);
               const isReviewedBoardItem =
                 shouldSplitReviewedSubmissions && reviewedBoardItemIds.has(id);
@@ -3595,28 +5063,52 @@ function App() {
 
               if (activeTab === "reviewPool") {
                 const reviewVote = localSentimentVotes[id] || "";
+                const promptAccepted = requiredReviewPromptAcceptedFor === "seen";
                 return (
                   <div
                     key={item?.appeal_id || item?.reconsideration_id || id}
                     className="proposal-card required-review-card"
                   >
+                    {!promptAccepted ? (
+                      <div
+                        className="required-review-prompt-backdrop"
+                        role="dialog"
+                        aria-modal="true"
+                        aria-labelledby={`required-review-prompt-${id}`}
+                      >
+                        <section className="required-review-prompt-panel">
+                          <h3 id={`required-review-prompt-${id}`}>
+                            {getRequiredReviewPromptText(item)}
+                          </h3>
+                          <button
+                            type="button"
+                            onClick={() => handleContinueRequiredReviewPrompt(id)}
+                          >
+                            Continue
+                          </button>
+                        </section>
+                      </div>
+                    ) : null}
+
                     <div className="proposal-card-top">
                       <h3>{getItemTitle(item)}</h3>
-                      <span className="state-pill subtle-pill">
-                        {formatActionType(currentBoardCode)}
-                      </span>
                     </div>
 
                     {description ? <p className="proposal-snippet">{description}</p> : null}
 
-                    <div className="vote-grid">
-                      {VOTE_OPTIONS.map((option) => (
+                    <div className="vote-grid primary-vote-grid">
+                      {VOTE_OPTIONS.filter((option) =>
+                        PRIMARY_VOTE_VALUES.has(option.value)
+                      ).map((option) => (
                         <button
                           key={option.value}
                           type="button"
-                          className={reviewVote === option.value ? "active-choice" : ""}
+                          className={getVoteButtonClassName(
+                            option.value,
+                            reviewVote
+                          )}
                           onClick={() => handleSubmitReviewAction(id, option.value)}
-                          disabled={reviewActionLoading}
+                          disabled={reviewActionLoading || !promptAccepted}
                         >
                           {reviewActionLoading
                             ? "Saving..."
@@ -3624,18 +5116,41 @@ function App() {
                         </button>
                       ))}
                     </div>
+
+                    <details className="more-info-panel flag-submission-panel required-review-flag-panel">
+                      <summary>Flag</summary>
+                      <div className="vote-grid">
+                        {VOTE_OPTIONS.filter((option) =>
+                          FLAG_VOTE_VALUES.has(option.value)
+                        ).map((option) => (
+                          <button
+                            key={option.value}
+                            type="button"
+                            className={
+                              reviewVote === option.value ? "active-choice" : ""
+                            }
+                            onClick={() =>
+                              handleSubmitReviewAction(id, option.value)
+                            }
+                            disabled={reviewActionLoading || !promptAccepted}
+                          >
+                            {reviewActionLoading
+                              ? "Saving..."
+                              : getVoteOptionLabel(option, currentBoardCode)}
+                          </button>
+                        ))}
+                      </div>
+                    </details>
                   </div>
                 );
               }
 
               if (activeTab === "trustReview") {
                 const detailRows = [
-                  item.user_public_id ? `User ID: ${item.user_public_id}` : null,
                   item.proposal_title ? `Submission: ${item.proposal_title}` : null,
                   item.related_proposal_title
                     ? `Related: ${item.related_proposal_title}`
                     : null,
-                  item.client_ip_hint ? `Network: ${item.client_ip_hint}` : null,
                 ].filter(Boolean);
 
                 return (
@@ -3746,45 +5261,68 @@ function App() {
           <div className="bottom-nav-drawer-content">
             <div className="nav-primary-row">
               {primaryNavigationTabs.map((tab) => (
-                <button
-                  key={tab.key}
-                  type="button"
-                  className={`tab-button tab-button-primary ${
-                    activeTab === tab.key ? "active" : ""
-                  }`}
-                  onClick={() => {
-                    handleTabChange(tab.key);
-                    setNavDrawerOpen(false);
-                    setFrontDrawer("nav");
-                  }}
-                >
-                  {tab.label}
-                </button>
+                (() => {
+                  const unavailableReason = getTabUnavailableReason(tab.key);
+                  return (
+                    <button
+                      key={tab.key}
+                      type="button"
+                      className={`tab-button tab-button-primary ${
+                        activeTab === tab.key ? "active" : ""
+                      } ${
+                        tutorialOpen && activeTutorialStep.highlightTab === tab.key
+                          ? "tutorial-target"
+                          : ""
+                      }`}
+                      disabled={feedAdvanceLocked || Boolean(unavailableReason)}
+                      title={unavailableReason}
+                      onClick={() => {
+                        handleTabChange(tab.key);
+                        setNavDrawerOpen(false);
+                        setFrontDrawer("nav");
+                      }}
+                    >
+                      {tab.label}
+                    </button>
+                  );
+                })()
               ))}
             </div>
 
             <div className="nav-secondary-row">
               {secondaryNavigationTabs.map((tab) => (
-                <button
-                  key={tab.key}
-                  type="button"
-                  className={`tab-button tab-button-secondary ${
-                    activeTab === tab.key ? "active" : ""
-                  } ${tab.moderatorOnly ? "tab-button-moderator" : ""}`}
-                  onClick={() => {
-                    handleTabChange(tab.key);
-                    setNavDrawerOpen(false);
-                    setFrontDrawer("nav");
-                  }}
-                >
-                  {tab.label}
-                </button>
+                (() => {
+                  const unavailableReason = getTabUnavailableReason(tab.key);
+                  return (
+                    <button
+                      key={tab.key}
+                      type="button"
+                      className={`tab-button tab-button-secondary ${
+                        activeTab === tab.key ? "active" : ""
+                      } ${tab.moderatorOnly ? "tab-button-moderator" : ""} ${
+                        tutorialOpen && activeTutorialStep.highlightTab === tab.key
+                          ? "tutorial-target"
+                          : ""
+                      }`}
+                      disabled={feedAdvanceLocked || Boolean(unavailableReason)}
+                      title={unavailableReason}
+                      onClick={() => {
+                        handleTabChange(tab.key);
+                        setNavDrawerOpen(false);
+                        setFrontDrawer("nav");
+                      }}
+                    >
+                      {tab.label}
+                    </button>
+                  );
+                })()
               ))}
               {showSubmissionSectionButton ? (
                 <button
                   type="button"
                   className="tab-button tab-button-secondary submission-tab-button"
                   onClick={handleSubmissionButton}
+                  disabled={feedAdvanceLocked}
                 >
                   Submission
                 </button>
@@ -3823,9 +5361,6 @@ function App() {
 
             {showSolutionSubmissionIssueDetail ? (
               <div className="detail-card detail-card-drawer solution-submission-issue-detail">
-                <span className="state-pill solution-target-pill">
-                  Problem Being Solved
-                </span>
                 <h3>{solutionTargetProposal.title}</h3>
 
                 <div className="detail-grid">
@@ -3872,12 +5407,6 @@ function App() {
                   </div>
                   <div>
                     <strong>Issue:</strong> {selectedExecution.parent_issue_title}
-                  </div>
-                  <div>
-                    <strong>Created:</strong> {selectedExecution.created_at}
-                  </div>
-                  <div>
-                    <strong>Updated:</strong> {selectedExecution.updated_at}
                   </div>
                 </div>
 
@@ -4233,36 +5762,25 @@ function App() {
             ) : null}
 
             {selectedProposal?.proposal ? (
-              <div className="detail-card detail-card-drawer">
+              <div className="detail-card detail-card-drawer proposal-detail-card">
                 {selectedIsSolutionTargetIssue ? (
                   <div className="solution-target-context">
-                    <span className="state-pill solution-target-pill">
-                      Problem Being Solved
-                    </span>
                     <p className="muted">
                       This is the issue that the current Solutions board is trying to solve.
                     </p>
                   </div>
                 ) : null}
-                <h3>{selectedProposal.proposal.title}</h3>
+                <h3 className="proposal-detail-title">
+                  {selectedProposal.proposal.title}
+                </h3>
 
-                <div className="detail-grid">
-                  {isModerator ? (
+                {isModerator && selectedStateLabel !== "active" ? (
+                  <div className="detail-grid">
                     <div>
                       <strong>State:</strong> {selectedStateLabel}
                     </div>
-                  ) : null}
-                  <div>
-                    <strong>Board:</strong> {selectedProposal.proposal.board_code}
                   </div>
-                  <div>
-                    <strong>Author ID:</strong>{" "}
-                    {formatPublicUserId(selectedProposal.proposal.author_user_id)}
-                  </div>
-                  <div>
-                    <strong>Created:</strong> {selectedProposal.proposal.created_at}
-                  </div>
-                </div>
+                ) : null}
 
                 {selectedProposal.proposal.archived_reason ? (
                   <>
@@ -4340,9 +5858,6 @@ function App() {
                     <div className="detail-grid">
                       <div>
                         <strong>Status:</strong> {selectedAppeal.status}
-                      </div>
-                      <div>
-                        <strong>Submitted:</strong> {selectedAppeal.created_at}
                       </div>
                     </div>
 
@@ -4553,37 +6068,39 @@ function App() {
                   </div>
                 ) : null}
 
-                {selectedProposal.proposal.problem_description ? (
-                  <>
-                    <h4>Problem Description</h4>
-                    <p>{selectedProposal.proposal.problem_description}</p>
-                  </>
-                ) : null}
+                <div className="proposal-detail-story">
+                  {selectedProposal.proposal.problem_description ? (
+                    <section className="proposal-detail-section proposal-detail-section-primary">
+                      <h4>Problem Description</h4>
+                      <p>{selectedProposal.proposal.problem_description}</p>
+                    </section>
+                  ) : null}
 
-                {selectedProposal.proposal.affected_scope ? (
-                  <>
-                    <h4>Affected Scope</h4>
-                    <p>{selectedProposal.proposal.affected_scope}</p>
-                  </>
-                ) : null}
+                  {selectedProposal.proposal.affected_scope ? (
+                    <section className="proposal-detail-section">
+                      <h4>Affected Scope</h4>
+                      <p>{selectedProposal.proposal.affected_scope}</p>
+                    </section>
+                  ) : null}
 
-                {selectedProposal.proposal.action_description ? (
-                  <>
-                    <h4>Action Description</h4>
-                    <p>{selectedProposal.proposal.action_description}</p>
-                  </>
-                ) : null}
+                  {selectedProposal.proposal.action_description ? (
+                    <section className="proposal-detail-section proposal-detail-section-primary">
+                      <h4>Action Description</h4>
+                      <p>{selectedProposal.proposal.action_description}</p>
+                    </section>
+                  ) : null}
 
-                {selectedProposal.proposal.why_it_matters ? (
-                  <>
-                    <h4>
-                      {selectedProposal.proposal.board_code === "solution"
-                        ? "Why This Solves It"
-                        : "Why It Matters"}
-                    </h4>
-                    <p>{selectedProposal.proposal.why_it_matters}</p>
-                  </>
-                ) : null}
+                  {selectedProposal.proposal.why_it_matters ? (
+                    <section className="proposal-detail-section">
+                      <h4>
+                        {selectedProposal.proposal.board_code === "solution"
+                          ? "Why This Solves It"
+                          : "Why It Matters"}
+                      </h4>
+                      <p>{selectedProposal.proposal.why_it_matters}</p>
+                    </section>
+                  ) : null}
+                </div>
 
                 {asArray(selectedProposal.proposal.required_resource_categories).length ? (
                   <>
@@ -4698,6 +6215,8 @@ function App() {
                 ) : null}
 
                 {personalVotingPanel}
+
+                {discussionPanel}
 
                 {selectedThresholdSummary ? (
                   <>
@@ -4883,7 +6402,14 @@ function App() {
                         value={moderationReason}
                         onChange={(event) => setModerationReason(event.target.value)}
                       >
+                        <option value="duplicate">duplicate</option>
+                        <option value="unsafe_illegal_deceptive">
+                          unsafe_illegal_deceptive
+                        </option>
+                        <option value="spam_abuse">spam_abuse</option>
                         <option value="irrelevant">irrelevant</option>
+                        <option value="minimum_quality">minimum_quality</option>
+                        <option value="superseded">superseded</option>
                         <option value="not_a_fit">not_a_fit</option>
                         <option value="moderation">moderation</option>
                         <option value="manual_archive">manual_archive</option>
@@ -5060,6 +6586,8 @@ function App() {
                     )}
                   </div>
                 </details>
+
+                {flagSubmissionPanel}
               </div>
             ) : null}
           </div>
@@ -5068,9 +6596,11 @@ function App() {
         <div className="bottom-dock" style={{ "--dock-columns": dockColumnCount }}>
           <button
             type="button"
-            className={`dock-button ${navDockActive ? "dock-button-active" : ""}`}
+            className={`dock-button sections-dock-button ${
+              navDockActive ? "dock-button-active" : ""
+            }`}
             onClick={toggleNavDrawer}
-            disabled={navigationTabs.length === 0}
+            disabled={feedAdvanceLocked || navigationTabs.length === 0}
             aria-pressed={navDockActive}
           >
             <span className="dock-icon" aria-hidden="true">☰</span>
@@ -5084,7 +6614,11 @@ function App() {
                 submissionDockActive ? "dock-button-active" : ""
               }`}
               onClick={handleSubmissionButton}
-              disabled={!currentUserSubmission && !canSubmitOnCurrentBoard}
+              disabled={
+                tutorialOpen ||
+                feedAdvanceLocked ||
+                (!currentUserSubmission && !canSubmitOnCurrentBoard)
+              }
               aria-pressed={submissionDockActive}
             >
               <span className="dock-icon" aria-hidden="true">+</span>
@@ -5094,8 +6628,11 @@ function App() {
 
           <button
             type="button"
-            className={`dock-button ${detailDockActive ? "dock-button-active" : ""}`}
+            className={`dock-button detail-dock-button ${
+              detailDockActive ? "dock-button-active" : ""
+            }`}
             onClick={toggleDetailDrawer}
+            disabled={tutorialOpen || feedAdvanceLocked}
             aria-pressed={detailDockActive}
           >
             <span className="dock-icon" aria-hidden="true">⌄</span>

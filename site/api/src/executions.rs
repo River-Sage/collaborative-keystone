@@ -85,10 +85,12 @@ pub async fn create_execution_record_handler(
     Path(solution_proposal_id): Path<Uuid>,
 ) -> Result<(StatusCode, Json<CreateExecutionRecordResponse>), AppError> {
     require_moderator(&auth_user)?;
-    ensure_solution_has_published_cycle_result(&state.db, solution_proposal_id).await?;
+    ensure_solution_has_published_cycle_result(&state.db, &state.locale.slug, solution_proposal_id)
+        .await?;
 
     let execution_record = create_execution_record_from_solution(
         &state.db,
+        &state.locale.slug,
         auth_user.user_id,
         solution_proposal_id,
         false,
@@ -106,6 +108,7 @@ pub async fn create_execution_record_handler(
 
 pub async fn create_execution_record_from_solution(
     db: &sqlx::PgPool,
+    locale_slug: &str,
     moderator_user_id: Uuid,
     solution_proposal_id: Uuid,
     return_existing_on_conflict: bool,
@@ -134,7 +137,7 @@ pub async fn create_execution_record_from_solution(
         JOIN cycles c ON c.id = p.cycle_id
         JOIN locales l ON l.id = p.locale_id
         WHERE p.id = $1
-          AND l.slug = 'world'
+          AND l.slug = $2
           AND (
             c.is_active = TRUE
             OR EXISTS (
@@ -150,6 +153,7 @@ pub async fn create_execution_record_from_solution(
         "#,
     )
     .bind(solution_proposal_id)
+    .bind(locale_slug)
     .fetch_optional(db)
     .await
     .map_err(|err| {
@@ -259,7 +263,12 @@ pub async fn create_execution_record_from_solution(
                 || constraint == "execution_records_one_solution_per_issue_cycle"
             {
                 if return_existing_on_conflict {
-                    return load_execution_record_by_solution(db, solution_proposal_id).await;
+                    return load_execution_record_by_solution(
+                        db,
+                        locale_slug,
+                        solution_proposal_id,
+                    )
+                    .await;
                 }
 
                 return Err(AppError::Conflict(
@@ -294,26 +303,30 @@ pub async fn create_execution_record_from_solution(
     )
     .await?;
 
-    load_execution_record(db, execution_record_id).await
+    load_execution_record(db, locale_slug, execution_record_id).await
 }
 
 async fn ensure_solution_has_published_cycle_result(
     db: &sqlx::PgPool,
+    locale_slug: &str,
     solution_proposal_id: Uuid,
 ) -> Result<(), AppError> {
     let row = sqlx::query(
         r#"
         SELECT EXISTS (
             SELECT 1
-            FROM cycle_results
-            WHERE board_code = 'solution'
-              AND result_status = 'resolved'
-              AND winning_proposal_id = $1
-              AND published_at IS NOT NULL
+            FROM cycle_results cr
+            JOIN locales l ON l.id = cr.locale_id
+            WHERE cr.board_code = 'solution'
+              AND cr.result_status = 'resolved'
+              AND cr.winning_proposal_id = $1
+              AND cr.published_at IS NOT NULL
+              AND l.slug = $2
         ) AS exists_flag
         "#,
     )
     .bind(solution_proposal_id)
+    .bind(locale_slug)
     .fetch_one(db)
     .await
     .map_err(|err| {
@@ -336,6 +349,7 @@ async fn ensure_solution_has_published_cycle_result(
 
 pub async fn list_execution_records_handler(
     State(state): State<Arc<AppState>>,
+    _auth_user: AuthUser,
 ) -> Result<Json<ExecutionRecordListResponse>, AppError> {
     let rows = sqlx::query(
         r#"
@@ -353,10 +367,11 @@ pub async fn list_execution_records_handler(
         JOIN proposals pi ON pi.id = er.parent_issue_proposal_id
         JOIN cycles c ON c.id = er.cycle_id
         JOIN locales l ON l.id = er.locale_id
-        WHERE l.slug = 'world'
+        WHERE l.slug = $1
         ORDER BY er.created_at DESC
         "#,
     )
+    .bind(&state.locale.slug)
     .fetch_all(&state.db)
     .await
     .map_err(|err| {
@@ -377,9 +392,11 @@ pub async fn list_execution_records_handler(
 
 pub async fn get_execution_record_handler(
     State(state): State<Arc<AppState>>,
+    _auth_user: AuthUser,
     Path(execution_record_id): Path<Uuid>,
 ) -> Result<Json<ExecutionRecordDetailResponse>, AppError> {
-    let execution_record = load_execution_record(&state.db, execution_record_id).await?;
+    let execution_record =
+        load_execution_record(&state.db, &state.locale.slug, execution_record_id).await?;
 
     Ok(Json(ExecutionRecordDetailResponse {
         ok: true,
@@ -398,18 +415,21 @@ pub async fn update_execution_record_handler(
     let existing = sqlx::query(
         r#"
         SELECT
-            id,
-            solution_proposal_id,
-            parent_issue_proposal_id,
-            status,
-            completion_criteria,
-            execution_tracking_entries
-        FROM execution_records
-        WHERE id = $1
+            er.id,
+            er.solution_proposal_id,
+            er.parent_issue_proposal_id,
+            er.status,
+            er.completion_criteria,
+            er.execution_tracking_entries
+        FROM execution_records er
+        JOIN locales l ON l.id = er.locale_id
+        WHERE er.id = $1
+          AND l.slug = $2
         LIMIT 1
         "#,
     )
     .bind(execution_record_id)
+    .bind(&state.locale.slug)
     .fetch_optional(&state.db)
     .await
     .map_err(|err| {
@@ -514,7 +534,8 @@ pub async fn update_execution_record_handler(
     )
     .await?;
 
-    let execution_record = load_execution_record(&state.db, execution_record_id).await?;
+    let execution_record =
+        load_execution_record(&state.db, &state.locale.slug, execution_record_id).await?;
 
     Ok(Json(UpdateExecutionRecordResponse {
         ok: true,
@@ -524,6 +545,7 @@ pub async fn update_execution_record_handler(
 
 async fn load_execution_record(
     db: &sqlx::PgPool,
+    locale_slug: &str,
     execution_record_id: Uuid,
 ) -> Result<ExecutionRecordDetail, AppError> {
     let row = sqlx::query(
@@ -545,11 +567,12 @@ async fn load_execution_record(
         JOIN proposals pi ON pi.id = er.parent_issue_proposal_id
         JOIN locales l ON l.id = er.locale_id
         WHERE er.id = $1
-          AND l.slug = 'world'
+          AND l.slug = $2
         LIMIT 1
         "#,
     )
     .bind(execution_record_id)
+    .bind(locale_slug)
     .fetch_optional(db)
     .await
     .map_err(|err| {
@@ -568,6 +591,7 @@ async fn load_execution_record(
 
 async fn load_execution_record_by_solution(
     db: &sqlx::PgPool,
+    locale_slug: &str,
     solution_proposal_id: Uuid,
 ) -> Result<ExecutionRecordDetail, AppError> {
     let row = sqlx::query(
@@ -596,7 +620,7 @@ async fn load_execution_record_by_solution(
     };
 
     let execution_record_id: Uuid = row.try_get("id").map_err(internal_db_err)?;
-    load_execution_record(db, execution_record_id).await
+    load_execution_record(db, locale_slug, execution_record_id).await
 }
 
 fn map_execution_summary_row(

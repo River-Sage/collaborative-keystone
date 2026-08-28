@@ -58,21 +58,32 @@ function readCookie(name) {
 }
 
 export const api = {
+  publicUrl: (path) => `${API_BASE}${path}`,
+  getSourceInfo: () => apiFetch("/source-info"),
+  getBuildProvenance: () => apiFetch("/.well-known/keystone-build.json"),
+  getLocaleRegistry: () => apiFetch("/.well-known/keystone-locales.json"),
   me: () => apiFetch("/auth/me"),
   login: (email, password) =>
     apiFetch("/auth/login", {
       method: "POST",
       body: JSON.stringify({ email, password }),
     }),
-  register: (email, password) =>
+  register: (email, password, turnstileToken = "") =>
     apiFetch("/auth/register", {
       method: "POST",
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({
+        email,
+        password,
+        turnstile_token: turnstileToken || null,
+      }),
     }),
-  requestPasswordReset: (email) =>
+  requestPasswordReset: (email, turnstileToken = "") =>
     apiFetch("/auth/password-reset/request", {
       method: "POST",
-      body: JSON.stringify({ email }),
+      body: JSON.stringify({
+        email,
+        turnstile_token: turnstileToken || null,
+      }),
     }),
   confirmPasswordReset: (token, newPassword) =>
     apiFetch("/auth/password-reset/confirm", {
@@ -96,6 +107,17 @@ export const api = {
   getSolutions: () => apiFetch("/proposals?board_code=solution"),
   getArchive: () => apiFetch("/proposals?board_code=archive"),
   getProposal: (id) => apiFetch(`/proposals/${id}`),
+  getProposalComments: (proposalId) => apiFetch(`/proposals/${proposalId}/comments`),
+  createProposalComment: (proposalId, body) =>
+    apiFetch(`/proposals/${proposalId}/comments`, {
+      method: "POST",
+      body: JSON.stringify({ body }),
+    }),
+  voteProposalComment: (proposalId, commentId, voteValue) =>
+    apiFetch(`/proposals/${proposalId}/comments/${commentId}/vote`, {
+      method: "POST",
+      body: JSON.stringify({ vote_value: voteValue }),
+    }),
   getExecutionRecords: () => apiFetch("/execution-records"),
   getExecutionRecord: (id) => apiFetch(`/execution-records/${id}`),
   updateExecutionRecord: (id, payload) =>

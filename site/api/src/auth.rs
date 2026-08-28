@@ -33,6 +33,7 @@ const VERIFY_EMAIL_RATE_LIMIT_MAX: usize = 10;
 const PASSWORD_RESET_REQUEST_RATE_LIMIT_MAX: usize = 5;
 const PASSWORD_RESET_CONFIRM_RATE_LIMIT_MAX: usize = 10;
 const PASSWORD_RESET_DURATION_HOURS: i64 = 1;
+const TURNSTILE_SITEVERIFY_URL: &str = "https://challenges.cloudflare.com/turnstile/v0/siteverify";
 const DEV_AUTH_TOKEN_ENV: &str = "CK_EXPOSE_DEV_AUTH_TOKENS";
 const LEGACY_DEV_EMAIL_TOKEN_ENV: &str = "CK_EXPOSE_DEV_EMAIL_TOKENS";
 #[cfg(debug_assertions)]
@@ -134,12 +135,12 @@ pub async fn seed_development_accounts(_db: &PgPool) {}
 pub struct RegisterRequest {
     pub email: String,
     pub password: String,
+    pub turnstile_token: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct RegisterResponse {
     pub ok: bool,
-    pub user_id: Uuid,
     pub email: String,
     pub email_verified: bool,
     pub verification_required: bool,
@@ -156,10 +157,10 @@ pub struct LoginRequest {
 #[derive(Debug, Serialize)]
 pub struct LoginResponse {
     pub ok: bool,
-    pub user_id: Uuid,
     pub email: String,
     pub email_verified: bool,
     pub role_code: String,
+    pub onboarding_required: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -189,6 +190,7 @@ pub struct EmailVerificationTokenResponse {
 #[derive(Debug, Deserialize)]
 pub struct PasswordResetRequest {
     pub email: String,
+    pub turnstile_token: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -211,10 +213,17 @@ pub struct PasswordResetConfirmResponse {
 #[derive(Debug, Serialize)]
 pub struct MeResponse {
     pub ok: bool,
-    pub user_id: Uuid,
     pub email: String,
     pub email_verified: bool,
     pub role_code: String,
+    pub onboarding_required: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct TurnstileSiteverifyResponse {
+    success: bool,
+    #[serde(default, rename = "error-codes")]
+    error_codes: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -224,6 +233,7 @@ pub struct AuthUser {
     pub email: String,
     pub email_verified: bool,
     pub role_code: String,
+    pub onboarding_required: bool,
 }
 
 impl AuthUser {
@@ -253,10 +263,10 @@ impl FromRequestParts<Arc<AppState>> for AuthUser {
             .headers
             .get(COOKIE)
             .and_then(|v| v.to_str().ok())
-            .ok_or_else(|| AppError::BadRequest("Not authenticated.".to_string()))?;
+            .ok_or_else(|| AppError::Unauthorized("Not authenticated.".to_string()))?;
 
         let session_token = extract_cookie_value(cookie_header, SESSION_COOKIE_NAME)
-            .ok_or_else(|| AppError::BadRequest("Not authenticated.".to_string()))?;
+            .ok_or_else(|| AppError::Unauthorized("Not authenticated.".to_string()))?;
 
         let row = sqlx::query(
             r#"
@@ -265,7 +275,8 @@ impl FromRequestParts<Arc<AppState>> for AuthUser {
                 u.id AS user_id,
                 u.email,
                 u.email_verified,
-                u.role_code
+                u.role_code,
+                u.last_login_at IS NULL AS onboarding_required
             FROM sessions s
             JOIN users u ON u.id = s.user_id
             WHERE s.session_token = encode(digest($1, 'sha256'), 'hex')
@@ -282,7 +293,7 @@ impl FromRequestParts<Arc<AppState>> for AuthUser {
         })?;
 
         let Some(row) = row else {
-            return Err(AppError::BadRequest("Not authenticated.".to_string()));
+            return Err(AppError::Unauthorized("Not authenticated.".to_string()));
         };
 
         Ok(AuthUser {
@@ -291,6 +302,9 @@ impl FromRequestParts<Arc<AppState>> for AuthUser {
             email: row.try_get("email").map_err(internal_db_err)?,
             email_verified: row.try_get("email_verified").map_err(internal_db_err)?,
             role_code: row.try_get("role_code").map_err(internal_db_err)?,
+            onboarding_required: row
+                .try_get("onboarding_required")
+                .map_err(internal_db_err)?,
         })
     }
 }
@@ -309,6 +323,7 @@ pub async fn register_handler(
         REGISTER_RATE_LIMIT_MAX,
     )
     .await?;
+    enforce_turnstile(&headers, payload.turnstile_token.as_deref()).await?;
     validate_password(&payload.password)?;
     let password_hash = hash_password(&payload.password)?;
 
@@ -334,7 +349,6 @@ pub async fn register_handler(
             let dev_verification_token = expose_dev_auth_tokens().then_some(verification_token);
             let response = RegisterResponse {
                 ok: true,
-                user_id,
                 email,
                 email_verified: row.try_get("email_verified").map_err(internal_db_err)?,
                 verification_required: true,
@@ -498,6 +512,7 @@ pub async fn password_reset_request_handler(
         PASSWORD_RESET_REQUEST_RATE_LIMIT_MAX,
     )
     .await?;
+    enforce_turnstile(&headers, payload.turnstile_token.as_deref()).await?;
 
     let user_row = sqlx::query(
         r#"
@@ -669,7 +684,13 @@ pub async fn login_handler(
 
     let row = sqlx::query(
         r#"
-        SELECT id, email, password_hash, email_verified, role_code
+        SELECT
+            id,
+            email,
+            password_hash,
+            email_verified,
+            role_code,
+            last_login_at IS NULL AS onboarding_required
         FROM users
         WHERE email = $1
         "#,
@@ -695,6 +716,9 @@ pub async fn login_handler(
     let email: String = row.try_get("email").map_err(internal_db_err)?;
     let email_verified: bool = row.try_get("email_verified").map_err(internal_db_err)?;
     let role_code: String = row.try_get("role_code").map_err(internal_db_err)?;
+    let onboarding_required: bool = row
+        .try_get("onboarding_required")
+        .map_err(internal_db_err)?;
 
     let session_token = generate_session_token();
     let csrf_token = generate_session_token();
@@ -733,6 +757,21 @@ pub async fn login_handler(
     )
     .await?;
 
+    sqlx::query(
+        r#"
+        UPDATE users
+        SET last_login_at = NOW()
+        WHERE id = $1
+        "#,
+    )
+    .bind(user_id)
+    .execute(&state.db)
+    .await
+    .map_err(|err| {
+        error!("database error updating last login: {}", err);
+        AppError::Internal("Failed to process login.".to_string())
+    })?;
+
     let mut response_headers = HeaderMap::new();
     response_headers.append(
         SET_COOKIE,
@@ -747,10 +786,10 @@ pub async fn login_handler(
 
     let response = LoginResponse {
         ok: true,
-        user_id,
         email,
         email_verified,
         role_code,
+        onboarding_required,
     };
 
     Ok((StatusCode::OK, response_headers, Json(response)))
@@ -793,14 +832,14 @@ pub async fn logout_handler(
 pub async fn me_handler(auth_user: AuthUser) -> Result<Json<MeResponse>, AppError> {
     Ok(Json(MeResponse {
         ok: true,
-        user_id: auth_user.user_id,
         email: auth_user.email,
         email_verified: auth_user.email_verified,
         role_code: auth_user.role_code,
+        onboarding_required: auth_user.onboarding_required,
     }))
 }
 
-fn normalize_email(email: &str) -> Result<String, AppError> {
+pub(crate) fn normalize_email(email: &str) -> Result<String, AppError> {
     let normalized = email.trim().to_lowercase();
 
     if normalized.is_empty() {
@@ -818,7 +857,7 @@ fn normalize_email(email: &str) -> Result<String, AppError> {
     Ok(normalized)
 }
 
-fn validate_password(password: &str) -> Result<(), AppError> {
+pub(crate) fn validate_password(password: &str) -> Result<(), AppError> {
     if password.len() < 12 {
         return Err(AppError::BadRequest(
             "Password must be at least 12 characters.".to_string(),
@@ -832,7 +871,7 @@ fn validate_password(password: &str) -> Result<(), AppError> {
     Ok(())
 }
 
-fn hash_password(password: &str) -> Result<String, AppError> {
+pub(crate) fn hash_password(password: &str) -> Result<String, AppError> {
     let salt = SaltString::generate(&mut OsRng);
     let argon2 = Argon2::default();
 
@@ -1024,6 +1063,72 @@ async fn send_password_reset_email(state: &Arc<AppState>, email: &str, token: &s
     }
 }
 
+async fn enforce_turnstile(
+    headers: &HeaderMap,
+    turnstile_token: Option<&str>,
+) -> Result<(), AppError> {
+    let Some(secret) = turnstile_secret_key() else {
+        return Ok(());
+    };
+
+    let token = turnstile_token
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::BadRequest("Human check is required.".to_string()))?;
+
+    let mut form = vec![
+        ("secret".to_string(), secret),
+        ("response".to_string(), token.to_string()),
+    ];
+
+    if let Some(remote_ip) = turnstile_remote_ip(headers) {
+        form.push(("remoteip".to_string(), remote_ip));
+    }
+
+    let response = reqwest::Client::new()
+        .post(TURNSTILE_SITEVERIFY_URL)
+        .form(&form)
+        .send()
+        .await
+        .map_err(|err| {
+            error!("turnstile verification request failed: {}", err);
+            AppError::Internal("Failed to verify human check.".to_string())
+        })?;
+
+    if !response.status().is_success() {
+        error!(
+            "turnstile verification returned HTTP status {}",
+            response.status()
+        );
+        return Err(AppError::BadRequest(
+            "Human check failed. Refresh and try again.".to_string(),
+        ));
+    }
+
+    let payload = response
+        .json::<TurnstileSiteverifyResponse>()
+        .await
+        .map_err(|err| {
+            error!(
+                "turnstile verification response could not be decoded: {}",
+                err
+            );
+            AppError::Internal("Failed to verify human check.".to_string())
+        })?;
+
+    if payload.success {
+        return Ok(());
+    }
+
+    error!(
+        "turnstile verification failed with codes: {:?}",
+        payload.error_codes
+    );
+    Err(AppError::BadRequest(
+        "Human check failed. Refresh and try again.".to_string(),
+    ))
+}
+
 async fn enforce_auth_rate_limit(
     state: &Arc<AppState>,
     headers: &HeaderMap,
@@ -1065,6 +1170,30 @@ fn client_rate_limit_identity(headers: &HeaderMap) -> String {
     }
 
     "unknown-client".to_string()
+}
+
+fn turnstile_secret_key() -> Option<String> {
+    std::env::var("CF_TURNSTILE_SECRET_KEY")
+        .or_else(|_| std::env::var("CK_TURNSTILE_SECRET_KEY"))
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn turnstile_remote_ip(headers: &HeaderMap) -> Option<String> {
+    for header_name in ["cf-connecting-ip", "true-client-ip", "x-real-ip"] {
+        if let Some(value) = normalized_header_value(headers, header_name) {
+            return Some(value);
+        }
+    }
+
+    normalized_header_value(headers, "x-forwarded-for").and_then(|value| {
+        value
+            .split(',')
+            .map(str::trim)
+            .find(|part| !part.is_empty())
+            .map(ToOwned::to_owned)
+    })
 }
 
 fn normalized_header_value(headers: &HeaderMap, name: &str) -> Option<String> {

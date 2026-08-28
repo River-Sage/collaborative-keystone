@@ -12,7 +12,7 @@ use tracing::error;
 use uuid::Uuid;
 
 use crate::{
-    AppState, anti_abuse, auth::AuthUser, error::AppError,
+    AppState, anti_abuse, auth::AuthUser, error::AppError, locale,
     reconsiderations::resolve_cleared_reconsiderations, votes::refresh_proposal_vote_counts,
 };
 
@@ -48,6 +48,7 @@ pub struct UnlockStatusQuery {
 pub struct UnlockStatusResponse {
     pub ok: bool,
     pub board_code: Option<String>,
+    pub locale_name: String,
     pub completed_review_actions: i64,
     pub required_review_actions: i64,
     pub review_unlocked: bool,
@@ -64,6 +65,7 @@ pub struct UnlockStatusResponse {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct UnlockState {
+    pub locale_name: String,
     pub completed_review_actions: i64,
     pub required_review_actions: i64,
     pub review_unlocked: bool,
@@ -121,7 +123,7 @@ pub async fn submit_review_action_handler(
                     OR (
                         (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count) > 0
                         AND p.unsafe_count::numeric
-                            / (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count)::numeric >= 0.35
+                            / (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count)::numeric >= 0.50
                     )
                   )
             ) AS reconsideration_moderation_due
@@ -352,6 +354,7 @@ pub async fn unlock_status_handler(
     Ok(Json(UnlockStatusResponse {
         ok: true,
         board_code: board_code_filter,
+        locale_name: unlock_state.locale_name,
         completed_review_actions: unlock_state.completed_review_actions,
         required_review_actions: unlock_state.required_review_actions,
         review_unlocked: unlock_state.review_unlocked,
@@ -464,7 +467,23 @@ pub async fn compute_unlock_state(
 
     let available_or_completed = completed_review_actions + required_review_actions;
     let target_review_actions = available_or_completed.clamp(0, 4);
-    let review_unlocked = completed_review_actions >= target_review_actions;
+    let dynamically_unlocked = completed_review_actions >= target_review_actions;
+    let persisted_unlocked =
+        has_persisted_review_unlock(db, user_id, active_cycle.cycle_id, board_code_filter).await?;
+
+    if dynamically_unlocked && !persisted_unlocked {
+        persist_review_unlock(
+            db,
+            user_id,
+            active_cycle.cycle_id,
+            board_code_filter,
+            completed_review_actions,
+            target_review_actions,
+        )
+        .await?;
+    }
+
+    let review_unlocked = persisted_unlocked || dynamically_unlocked;
     let now = Utc::now();
     let cycle_open = now >= active_cycle.starts_at && now < active_cycle.voting_ends_at;
     let submission_open = cycle_open;
@@ -479,6 +498,7 @@ pub async fn compute_unlock_state(
     .to_string();
 
     Ok(UnlockState {
+        locale_name: active_cycle.locale_name,
         completed_review_actions,
         required_review_actions: target_review_actions,
         review_unlocked,
@@ -494,29 +514,112 @@ pub async fn compute_unlock_state(
     })
 }
 
+async fn has_persisted_review_unlock(
+    db: &sqlx::PgPool,
+    user_id: Uuid,
+    cycle_id: Uuid,
+    board_code_filter: Option<&str>,
+) -> Result<bool, AppError> {
+    let Some(board_code) = board_code_filter else {
+        return Ok(false);
+    };
+
+    let row = sqlx::query(
+        r#"
+        SELECT EXISTS (
+            SELECT 1
+            FROM review_unlocks
+            WHERE user_id = $1
+              AND cycle_id = $2
+              AND board_code = $3
+        ) AS unlocked
+        "#,
+    )
+    .bind(user_id)
+    .bind(cycle_id)
+    .bind(board_code)
+    .fetch_one(db)
+    .await
+    .map_err(|err| {
+        error!("database error loading persisted review unlock: {}", err);
+        AppError::Internal("Failed to load review progress.".to_string())
+    })?;
+
+    row.try_get("unlocked").map_err(internal_db_err)
+}
+
+async fn persist_review_unlock(
+    db: &sqlx::PgPool,
+    user_id: Uuid,
+    cycle_id: Uuid,
+    board_code_filter: Option<&str>,
+    completed_review_actions: i64,
+    required_review_actions: i64,
+) -> Result<(), AppError> {
+    let Some(board_code) = board_code_filter else {
+        return Ok(());
+    };
+
+    if board_code != "issue" && board_code != "solution" {
+        return Ok(());
+    }
+
+    sqlx::query(
+        r#"
+        INSERT INTO review_unlocks (
+            user_id,
+            cycle_id,
+            board_code,
+            completed_review_actions,
+            required_review_actions
+        )
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (user_id, cycle_id, board_code)
+        DO NOTHING
+        "#,
+    )
+    .bind(user_id)
+    .bind(cycle_id)
+    .bind(board_code)
+    .bind(completed_review_actions as i32)
+    .bind(required_review_actions as i32)
+    .execute(db)
+    .await
+    .map_err(|err| {
+        error!("database error persisting review unlock: {}", err);
+        AppError::Internal("Failed to save review progress.".to_string())
+    })?;
+
+    Ok(())
+}
+
 struct ActiveCycle {
     cycle_id: Uuid,
+    locale_name: String,
     starts_at: DateTime<Utc>,
     submission_ends_at: DateTime<Utc>,
     voting_ends_at: DateTime<Utc>,
 }
 
 async fn get_active_cycle(db: &sqlx::PgPool) -> Result<ActiveCycle, AppError> {
+    let locale_slug = locale::configured_locale_slug();
     let row = sqlx::query(
         r#"
         SELECT
             c.id AS cycle_id,
+            l.name AS locale_name,
             c.starts_at,
             c.submission_ends_at,
             c.voting_ends_at
         FROM cycles c
         JOIN locales l ON l.id = c.locale_id
-        WHERE l.slug = 'world'
+        WHERE l.slug = $1
           AND c.is_active = TRUE
         ORDER BY c.created_at DESC
         LIMIT 1
         "#,
     )
+    .bind(&locale_slug)
     .fetch_optional(db)
     .await
     .map_err(|err| {
@@ -530,6 +633,7 @@ async fn get_active_cycle(db: &sqlx::PgPool) -> Result<ActiveCycle, AppError> {
 
     Ok(ActiveCycle {
         cycle_id: row.try_get("cycle_id").map_err(internal_db_err)?,
+        locale_name: row.try_get("locale_name").map_err(internal_db_err)?,
         starts_at: row.try_get("starts_at").map_err(internal_db_err)?,
         submission_ends_at: row.try_get("submission_ends_at").map_err(internal_db_err)?,
         voting_ends_at: row.try_get("voting_ends_at").map_err(internal_db_err)?,
@@ -614,7 +718,7 @@ async fn get_required_review_actions(
                     OR (
                         (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count) > 0
                         AND p.unsafe_count::numeric
-                            / (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count)::numeric >= 0.35
+                            / (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count)::numeric >= 0.50
                     )
                   )
               )
@@ -627,7 +731,7 @@ async fn get_required_review_actions(
                 OR (
                     p.unsafe_count::numeric
                     / (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count)::numeric
-                ) < 0.35
+                ) < 0.50
               )
         "#,
     )
@@ -658,7 +762,7 @@ fn excluded_from_review_credit(
 
     negative_count > 8 * support_count.max(1)
         || unsafe_count >= 8
-        || fraction_at_least(unsafe_count, total_count, 0.35)
+        || fraction_at_least(unsafe_count, total_count, 0.50)
 }
 
 fn fraction_at_least(part: i32, total: i32, threshold: f64) -> bool {

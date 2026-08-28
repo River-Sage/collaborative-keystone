@@ -36,7 +36,6 @@ pub struct CastMergeVoteRequest {
 pub struct CastVoteResponse {
     pub ok: bool,
     pub proposal_id: Uuid,
-    pub user_id: Uuid,
     pub sentiment_vote: Option<String>,
     pub merge_vote_present: bool,
     pub merge_target_proposal_id: Option<Uuid>,
@@ -45,6 +44,7 @@ pub struct CastVoteResponse {
 struct VoteableProposalContext {
     board_code: String,
     primary_state: String,
+    author_user_id: Uuid,
 }
 
 pub async fn cast_sentiment_vote_handler(
@@ -69,7 +69,14 @@ pub async fn cast_sentiment_vote_handler(
         ));
     }
 
-    let proposal = get_voteable_proposal_context(&state.db, proposal_id).await?;
+    let proposal =
+        get_voteable_proposal_context(&state.db, &state.locale.slug, proposal_id).await?;
+    if proposal.author_user_id == auth_user.user_id {
+        return Err(AppError::BadRequest(
+            "You cannot vote on your own proposal.".to_string(),
+        ));
+    }
+
     if proposal.primary_state == "archived" {
         ensure_archive_voting_unlocked(&state.db, auth_user.user_id, Some(&proposal.board_code))
             .await?;
@@ -122,7 +129,6 @@ pub async fn cast_sentiment_vote_handler(
         Json(CastVoteResponse {
             ok: true,
             proposal_id,
-            user_id: auth_user.user_id,
             sentiment_vote: Some(vote_value),
             merge_vote_present,
             merge_target_proposal_id,
@@ -152,7 +158,14 @@ pub async fn cast_merge_vote_handler(
         ));
     }
 
-    let proposal = get_voteable_proposal_context(&state.db, proposal_id).await?;
+    let proposal =
+        get_voteable_proposal_context(&state.db, &state.locale.slug, proposal_id).await?;
+    if proposal.author_user_id == auth_user.user_id {
+        return Err(AppError::BadRequest(
+            "You cannot mark your own proposal as a duplicate.".to_string(),
+        ));
+    }
+
     if proposal.primary_state == "archived" {
         return Err(AppError::BadRequest(
             "Merge signaling is only available for active proposals.".to_string(),
@@ -219,7 +232,6 @@ pub async fn cast_merge_vote_handler(
         Json(CastVoteResponse {
             ok: true,
             proposal_id,
-            user_id: auth_user.user_id,
             sentiment_vote,
             merge_vote_present: true,
             merge_target_proposal_id,
@@ -229,19 +241,21 @@ pub async fn cast_merge_vote_handler(
 
 async fn get_voteable_proposal_context(
     db: &sqlx::PgPool,
+    locale_slug: &str,
     proposal_id: Uuid,
 ) -> Result<VoteableProposalContext, AppError> {
     let proposal = sqlx::query(
         r#"
         SELECT
             b.code AS board_code,
-            p.primary_state
+            p.primary_state,
+            p.author_user_id
         FROM proposals p
         JOIN boards b ON b.id = p.board_id
         JOIN cycles c ON c.id = p.cycle_id
         JOIN locales l ON l.id = p.locale_id
         WHERE p.id = $1
-          AND l.slug = 'world'
+          AND l.slug = $2
           AND b.code IN ('issue', 'solution')
           AND p.primary_state IN ('active', 'archived')
           AND (
@@ -267,7 +281,7 @@ async fn get_voteable_proposal_context(
                             OR (
                                 (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count) > 0
                                 AND p.unsafe_count::numeric
-                                    / (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count)::numeric >= 0.35
+                                    / (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count)::numeric >= 0.50
                             )
                           )
                     )
@@ -277,6 +291,7 @@ async fn get_voteable_proposal_context(
         "#,
     )
     .bind(proposal_id)
+    .bind(locale_slug)
     .fetch_optional(db)
     .await
     .map_err(|err| {
@@ -291,6 +306,9 @@ async fn get_voteable_proposal_context(
     Ok(VoteableProposalContext {
         board_code: proposal.try_get("board_code").map_err(internal_db_err)?,
         primary_state: proposal.try_get("primary_state").map_err(internal_db_err)?,
+        author_user_id: proposal
+            .try_get("author_user_id")
+            .map_err(internal_db_err)?,
     })
 }
 
@@ -441,30 +459,35 @@ pub(crate) async fn refresh_proposal_vote_counts(
                     SELECT COUNT(*)::int
                     FROM proposal_sentiment_votes
                     WHERE proposal_id = $1
+                      AND user_id <> (SELECT author_user_id FROM proposals WHERE id = $1)
                       AND vote_value = 'support'
                 ) AS support_count,
                 (
                     SELECT COUNT(*)::int
                     FROM proposal_sentiment_votes
                     WHERE proposal_id = $1
+                      AND user_id <> (SELECT author_user_id FROM proposals WHERE id = $1)
                       AND vote_value = 'not_a_fit'
                 ) AS not_a_fit_count,
                 (
                     SELECT COUNT(*)::int
                     FROM proposal_sentiment_votes
                     WHERE proposal_id = $1
+                      AND user_id <> (SELECT author_user_id FROM proposals WHERE id = $1)
                       AND vote_value = 'unclear'
                 ) AS unclear_count,
                 (
                     SELECT COUNT(*)::int
                     FROM proposal_sentiment_votes
                     WHERE proposal_id = $1
+                      AND user_id <> (SELECT author_user_id FROM proposals WHERE id = $1)
                       AND vote_value = 'unsafe'
                 ) AS unsafe_count,
                 (
                     SELECT COUNT(*)::int
                     FROM proposal_merge_votes mv
                     WHERE mv.proposal_id = $1
+                      AND mv.user_id <> (SELECT author_user_id FROM proposals WHERE id = $1)
                       AND mv.target_proposal_id IS NOT NULL
                       AND EXISTS (
                         SELECT 1
@@ -493,7 +516,7 @@ pub(crate) async fn refresh_proposal_vote_counts(
                   OR (
                     (counts.support_count + counts.not_a_fit_count + counts.unclear_count + counts.unsafe_count + counts.merge_count) > 0
                     AND counts.unsafe_count::numeric
-                        / (counts.support_count + counts.not_a_fit_count + counts.unclear_count + counts.unsafe_count + counts.merge_count)::numeric >= 0.35
+                        / (counts.support_count + counts.not_a_fit_count + counts.unclear_count + counts.unsafe_count + counts.merge_count)::numeric >= 0.50
                   )
                 THEN COALESCE(p.high_moderation_watch_started_at, NOW())
                 ELSE NULL

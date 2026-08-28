@@ -104,6 +104,212 @@ The system should be designed so it can later support:
 
 Locale support should therefore exist as a first-class concept in the data model, even if only one locale is active in v1.
 
+User-facing sentence copy that names the active locale should render **World** as **the World**. Other locale names should be rendered as their normal display label without automatically adding **the**.
+
+Primary in-app brand copy should prepend the active locale display name to Keystone, such as **World Keystone**, **Castle Rock Keystone**, or **Douglas County Keystone**. This is brand copy, so it should use **World Keystone**, not **the World Keystone**.
+
+### 4.3 Localized deployment model
+
+The project should support a future model where a new locale instance can be spun up from the public repository with a small, documented configuration change rather than code edits.
+
+A localized deployment should be able to define at minimum:
+
+* locale slug
+* locale display name
+* public web origin
+* public API origin
+* contact / operator identity
+* whether the deployment is official, authorized, or community-operated
+
+The default v1 deployment remains the World locale, but locale configuration must not be hardcoded so deeply that a county, city, state, country, or other community cannot reasonably launch its own instance later.
+
+### 4.4 Global locale access point
+
+Users should access locale-specific Keystone instances through the central global Keystone site.
+
+The global site should act as the trusted entry point, locale directory, and provenance registry. A user who wants to reach Castle Rock Keystone, Douglas County Keystone, or another locale should begin at the global site and choose or search for that locale there.
+
+The global site may route, link, deep-link, or eventually proxy users into a locale deployment, but the user-facing trust path starts from the canonical global site. Direct locale URLs may exist for operations, hosting, and deep links, but they should not be the primary discovery or trust mechanism.
+
+The global locale registry should eventually include:
+
+* locale slug
+* locale display name
+* locale type
+* public web origin
+* public API origin
+* operator/contact identity
+* deployment status: canonical, official, authorized, verified, stale, warning, suspended, compromised, abandoned, community, unverified, or development
+* latest verified release identifier
+* provenance verification status
+
+Locale deployments that are not listed in the global registry should be treated as unverified community deployments.
+
+Current v1 implementation:
+
+* Each API process runs as one configured locale, identified by `CK_LOCALE_SLUG`, `CK_LOCALE_NAME`, and `CK_LOCALE_TYPE`.
+* Startup must create or update the configured locale row and open that locale's active cycle if no active cycle exists.
+* Proposal, review, voting, archive, outcome, appeal, reconsideration, discussion, and implementation endpoints must scope user-visible and moderator-visible records to the configured locale.
+* The World deployment may expose additional locale registry entries through `CK_LOCALE_REGISTRY_JSON` until a signed registry service exists.
+* The web UI may show a compact locale directory when the registry contains more than one locale with a web origin.
+* Locale instances must be launchable by environment configuration and helper scripts, not source-code edits.
+
+### 4.5 Brand portability
+
+Localized deployments should preserve the Keystone product identity without confusing users about official status.
+
+The normal in-app brand pattern is:
+
+* **{Locale Display Name} Keystone**
+
+Examples:
+
+* **World Keystone**
+* **Castle Rock Keystone**
+* **Douglas County Keystone**
+
+Community deployments may use the Keystone software under the project license, but they must clearly identify their locale, operator, source repository, and whether they are an official or community deployment. They must not imply they are the central official instance unless explicitly authorized.
+
+### 4.6 Product and distribution layers
+
+The project should distinguish the software, the canonical service, and local deployable instances as related but separate products.
+
+Required planning layers:
+
+* **Keystone Core** - the public source code, requirements, migrations, and documentation released under the repository software license.
+* **Global Keystone** - the canonical hosted service and trusted front door for locale discovery.
+* **Locale Keystone Distribution** - an official signed release package generated from Keystone Core to make a new locale easy to run.
+* **Locale Keystone Instance** - a running locale deployment with its own database, domain/origin configuration, instance secrets, moderators, audit trail, and implementation records.
+* **Community Fork** - any modified or independently distributed version that is not verified as an official release and not authorized as an official locale.
+
+The localized distributable should be different from the main global site by configuration, registry status, and operator identity, not by hidden rule changes. It should be possible to verify that a locale instance is running an official release with only allowed locale/environment configuration changes.
+
+This distinction lets the public repository remain transparent while the official global instance remains verifiable and while local communities can run their own properly labeled Keystone instances.
+
+### 4.7 Signed distributable releases and instance secrets
+
+Locale deployments should eventually be distributed as signed release artifacts or signed container images with a matching manifest.
+
+The release manifest should identify:
+
+* release identifier
+* source commit SHA
+* artifact digests
+* database migration set digest
+* supported runtime/spec version
+* expected configuration schema version
+* official release signature
+
+The locale configuration manifest should identify non-secret deployment facts:
+
+* locale slug
+* locale display name
+* locale type
+* web origin
+* API origin
+* operator/contact identity
+* deployment status
+* public instance verification key
+* release identifier
+* configuration digest
+
+World registry configuration may be supplied as `CK_LOCALE_REGISTRY_JSON` in early deployments. This configuration is not a substitute for a signed registry authority. It is a development and bootstrap bridge that lets the canonical global site publish locale entries while the signing/check-in service is still being built.
+
+Every running instance must publicly expose source/license information and build provenance metadata. In v1 this is implemented as:
+
+* `/source-info`
+* `/.well-known/keystone-build.json`
+* `/.well-known/keystone-locales.json`
+
+Secrets must not be committed to the repository or embedded in public artifacts. Instance-specific private material belongs in environment variables, a secret manager, or an operator-controlled secret file that is excluded from source control.
+
+Examples of private instance secrets:
+
+* database credentials
+* session cookie signing/encryption secret
+* CSRF or token signing secret, if separated
+* mail credentials
+* instance signing private key
+* backup encryption key
+* one-time bootstrap moderator token
+
+Cryptographic methods, manifest formats, and verification code should be public. Private keys and deployment secrets should not be public.
+
+Encryption is useful for secrets, backups, operator handoff bundles, and protecting private runtime configuration. It should not be used as a promise that the open-source application code is hidden or unmodifiable. Under the AGPL/open-source model, modified deployments are allowed, but they must be distinguishable from signed official releases.
+
+### 4.8 First moderator bootstrap
+
+A fresh locale deployment needs a safe way to create the first moderator.
+
+On first run, if no moderator exists, the locale instance may expose a bootstrap flow that requires a one-time bootstrap token or local-console command. After the first moderator is created:
+
+* the bootstrap token must be invalidated
+* the bootstrap route/command must refuse further use
+* the action must be written to the audit trail
+* the created moderator should be labeled as the initial locale moderator
+* the instance should surface whether bootstrap is complete in its health/provenance metadata
+
+The first moderator does not become an owner of the software or the brand. They become the initial moderator-steward for that locale instance, subject to the same moderation, audit, and implementation-tracking limits as other moderators.
+
+The current v1 HTTP bootstrap implementation is `POST /bootstrap/first-moderator`. It requires `CK_BOOTSTRAP_MODERATOR_TOKEN`, a 32+ character token supplied in the request body, and refuses all future bootstrap attempts after a verified moderator exists. The bootstrap action must be recorded in deployment audit events and exposed as completed in build/provenance metadata.
+
+### 4.9 Canonical instance and build provenance
+
+There should be one central canonical instance operated by the project owner. That instance is the official reference deployment.
+
+The canonical instance should eventually publish a machine-readable provenance manifest, exposed from a stable public path such as `/.well-known/keystone-build.json`. The manifest should include at minimum:
+
+* source repository URL
+* git commit SHA
+* build timestamp
+* build environment identifier
+* deployment / registry status
+* trust tier
+* web artifact digest
+* API artifact digest
+* database migration set digest
+* public release identifier
+* signature, Sigstore bundle, or equivalent official attestation over the manifest
+
+A hash alone is not enough to prove official integrity because anyone can hash a modified build. The canonical instance should use cryptographic signing so users, auditors, and future local deployments can verify that a published build matches an official release signed by the project authority.
+
+The target signing path is Sigstore Cosign with project-controlled CI identity and SLSA-style provenance. If the project later uses keyful signing through KMS or hardware custody, the public verification key should be published in the repository and from an official DNS or `/.well-known/` location. If verification material disagrees, the UI or deployment tooling should treat verification as failed.
+
+### 4.10 Tamper-evident official deployment
+
+The long-term official deployment should be hardened so the public can tell whether it is running the expected software and whether important records have been altered unexpectedly.
+
+This does not mean hiding the requirements or source code. Requirements remain public. The goal is an operationally hardened official instance with:
+
+* signed release artifacts
+* signed release manifests before public locale distribution is encouraged
+* reproducible builds as a later higher trust tier where feasible
+* immutable deployment artifacts
+* restricted production access
+* tamper-evident audit logs
+* database backups with integrity checks
+* visible official/community deployment status
+
+Forks can modify the open-source code, but they should be visibly distinct from the canonical deployment unless they can prove they are running an official signed release with only allowed locale/environment configuration changes.
+
+### 4.11 Licensing and brand separation requirements
+
+The repository software is licensed separately from the Collaborative Keystone name, logo, visual identity, and official project branding.
+
+Engineering and deployment tooling must preserve that separation:
+
+* AGPL source availability must not be blocked by encryption, packaging, or appliance-style deployment.
+* Every running web UI should provide visible Source, AGPL, Build Info, and Registry links from public/login surfaces and the Settings view.
+* World Keystone may show a creator support link in Settings. Other locale deployments must not show the World Keystone Patreon link.
+* Signed official releases may be distributed for convenience, but users must still be able to obtain the corresponding source required by the software license.
+* Modified deployments must not claim official status unless they are authorized and verifiably running an approved release/configuration.
+* Community deployments must preserve attribution and license notices.
+* Official branding is reserved for Global Keystone and authorized locale instances.
+* A locale instance may use the `{Locale Display Name} Keystone` pattern only in a way consistent with the trademark/brand policy, operator agreement, and registry status.
+* The operator agreement template, release signing target, and registry status contract are tracked in `docs/operator-agreement-template.md`, `docs/release-signing-and-provenance.md`, and `docs/locale-registry-statuses.md`.
+
+If the project later wants a separate proprietary operational appliance, managed hosting product, trademark license, certification mark, or dual-license offering, that should be treated as a separate legal/product decision and documented before launch.
+
 ---
 
 ## 5. Identity, Onboarding, and Anti-Abuse
@@ -144,7 +350,17 @@ It should not be required globally in v1 unless usage is tiny and cost remains s
 
 ### 5.5 Participation gating
 
+A signed-in account with an unverified email must be gated to email verification only. The web UI must not expose board navigation, board content, submission controls, voting controls, discussion controls, account surfaces, or review-unlock copy until verification is complete.
+
+After email verification succeeds, the user should be routed into the required-review pool when required reviews are waiting. If no required reviews are waiting, the user may proceed to the normal verified app flow.
+
 A newly created account must still satisfy the cycle review unlock rules before submitting or voting in a cycle.
+
+### 5.6 First-time onboarding
+
+First-time onboarding applies only after email verification. The verification gate takes priority over welcome/tutorial screens. After verification, the system should prefer the required-review handoff when required reviews are waiting; onboarding may appear before normal board use when it does not obscure the verification and required-review gates. The system may use `last_login_at` to determine first login. Local browser dismissal state must not suppress first-time onboarding when the account is reset for development testing.
+
+After a user completes the required-review pool for the first time, the interface should show a one-time, non-skippable handoff tutorial. First, it should fully blur the board and say: "These are real submissions, by real people." When the user clicks the fade, it should show: "Voting is unlimited, so please vote on as many submissions as you can." When the user clicks again, it should transition to highlighting the first available submission in the board list and say: "Please click this one and open it." The tutorial should let the user click that highlighted submission. After the detail pane opens, the UI should blur again and say: "Scroll down to vote, discuss or flag this submission." Clicking the fade or scrolling down then closes the tutorial and returns full control; a scroll-down gesture should also move the detail pane downward. Local browser dismissal state must not suppress this handoff tutorial when the account is reset for development testing and returns with first-login onboarding required.
 
 ---
 
@@ -154,8 +370,8 @@ A newly created account must still satisfy the cycle review unlock rules before 
 
 Version 1 recognizes:
 
-* **Guest** — may browse public content
-* **Registered User** — verified email, may complete review unlocks, submit proposals, vote, and appeal if eligible
+* **Guest** — may access login, registration, account recovery, health-check, source/license, build-provenance, and locale-registry metadata surfaces only. Guest browsing of proposal, result, implementation, archive, or merge-relationship content is disabled for now.
+* **Registered User** — verified email, may browse app content, complete review unlocks, submit proposals, vote, and appeal if eligible
 * **Moderator** — may act only within specified moderation powers and thresholds
 
 For implementation tracking, moderators also perform steward recordkeeping duties in v1.
@@ -248,6 +464,8 @@ Each proposal must belong to exactly:
 
 A proposal cannot be edited by the author after submission in version 1.
 
+Because proposals are not editable after submission, the UI must show a preview of the issue or solution as it will appear and require explicit confirmation before creating the proposal.
+
 ## 8.2 Issue proposal requirements
 
 An issue proposal must satisfy the following minimum quality rules:
@@ -294,7 +512,28 @@ No separate field is required for “What issue does this solve?” because the 
 
 No separate field is required for “How will we know this is done?” because this is already covered by completion criteria.
 
-### 8.4 Input size limits
+### 8.4 Submission discussion
+
+Discussion is attached to individual issue and solution submissions. Version 1 does not include separate board-wide forums, direct messages, public profiles, usernames, or public user identifiers.
+
+Discussion rules:
+
+* only authenticated, email-verified users who have completed the relevant board review unlock may post or vote on comments
+* each user may post at most one comment per submission
+* the database must enforce the one-comment-per-user-per-submission rule
+* authors may comment on their own submissions
+* an author's comment may be labeled only as **Author**
+* comment responses and UI must not expose emails, raw user IDs, public user IDs, usernames, profiles, or other identity breadcrumbs
+* each new comment automatically starts with a like from its author
+* users may like or dislike comments
+* comment like/dislike counts and ratios must not be visible to standard users
+* comments are sorted by hidden like-to-dislike ratio, then hidden net preference, then hidden total comment-vote activity, then oldest first
+* comment voting affects only comment ordering and must not affect proposal ranking, outcome resolution, or proposal vote counts
+* comments do not amend the official proposal text
+* discussion closes when the submission is no longer active
+* archived comments remain visible as historical context, but archived submissions do not accept new comments or comment votes in v1
+
+### 8.5 Input size limits
 
 Version 1 uses bounded proposal inputs to keep submissions reviewable and prevent oversized payloads:
 
@@ -303,6 +542,10 @@ Version 1 uses bounded proposal inputs to keep submissions reviewable and preven
 * Affected people or scope is capped at 500 characters.
 * Solution problem-fit explanations are capped at 1,000 characters.
 * External implementation links are capped at 2,048 characters.
+
+### 8.6 User-facing detail presentation
+
+Proposal details should be presented as a centered, readable detail pane with a consistent maximum content width across title, description sections, and participation controls. Routine metadata such as author IDs, board labels, and creation timestamps should not be shown to standard users.
 
 ---
 
@@ -413,6 +656,18 @@ Moderator-stewards may update implementation progress, resource acquisition valu
 
 Moderator-stewards may not directly mark an implementation `completed` or `cancelled` in v1. Completion and cancellation require a future claim/review flow or other community-ratified mechanism. Until that mechanism exists, Keystone should track progress without allowing a single moderator to finalize or terminate implementation status.
 
+### 9.9 Locale boundaries for implementations
+
+Implementation records belong to the locale instance and cycle that produced the winning solution.
+
+A Castle Rock deployment, Douglas County deployment, World deployment, or other localized instance should track its own implementation records independently. Implementation status, resource progress, steward notes, and evidence links must not automatically cross from one locale deployment into another.
+
+If a future central discovery or federation layer lists external Keystone deployments, it should identify the source deployment, locale, operator, provenance status, and last verified build. External implementation records may be referenced or linked, but they should not be silently blended into the canonical instance's own implementation records.
+
+Users should discover and access those locale implementation records through the global locale access point. If the global site summarizes implementation progress from a locale deployment, the summary must preserve the source locale, operator, provenance status, and last verified update time.
+
+This preserves local accountability: each locale's Keystone is responsible for the real-world follow-through selected by that locale's users.
+
 ---
 
 ## 10. Proposal Submission Restrictions
@@ -447,7 +702,9 @@ Each user may cast exactly one sentiment vote per proposal:
 * **Unclear**
 * **Unsafe / Illegal / Deceptive**
 
-The Issue Board may display the **Not a Fit** sentiment as **Pass** in the user interface while preserving the internal `not_a_fit` vote value and count.
+The Issue Board may display the **Not a Fit** sentiment as **Downvote** in the user interface while preserving the internal `not_a_fit` vote value and count.
+
+Primary sentiment controls should make the main decision visually clear without dominating the page: Support and Not a Fit / Downvote should share a consistent full-width control row, using subdued green and red tint treatments respectively. Secondary flag choices should remain visually quieter.
 
 These are mutually exclusive.
 
@@ -486,6 +743,8 @@ Internal derived values:
 
 These values are internal and should not be shown during the live cycle.
 
+After cycle closeout, the selected winner and its relevant outcome record must be published in an auditable form. Hidden live vote surfaces are intended to prevent mid-cycle score chasing, not to hide final outcome history after voting has ended.
+
 ---
 
 ## 12. Vote Visibility Rules
@@ -512,6 +771,10 @@ Users must not see:
 ### 12.3 After cycle completion
 
 The platform may publish final cycle results, including vote totals and outcome data, after the monthly cycle has closed.
+
+### 12.4 User identifier visibility
+
+Normal API and UI surfaces must not expose raw user UUIDs for proposal authors, moderators, appeal reviewers, reconsideration reviewers, or the currently logged-in account unless a future audited export specifically requires them. Moderator-facing queues should identify work by proposal, threshold signal, and action history rather than by real user identity.
 
 ---
 
@@ -560,6 +823,8 @@ The next required review should prioritize the lowest-exposure eligible proposal
 
 The user should not see a stack of multiple required-review cards while locked.
 
+Required-review progress shown to the user should be one-based while the user is actively reviewing: the first required review is shown as **Review 1/4**, not **0/4**. If fewer than four eligible reviewable submissions exist, the UI should also indicate the scaled-down available count and how many reviews remain after the current one.
+
 Required review is an internal forced state, not a persistent user navigation section. After the unlock is complete, the user should not be able to reopen Required Reviews as a normal board section.
 
 The normal Issue and Solution board feeds should reuse the required-review priority buckets as their default ordering, repeating the four-slot priority pattern across the full list rather than using a separate feed tab.
@@ -573,7 +838,7 @@ A required review action must require the participant to cast one of the normal 
 * Unclear
 * Unsafe / Illegal / Deceptive
 
-The Issue Board may display Not a Fit as Pass in required-review and voting controls while preserving the internal `not_a_fit` vote value.
+The Issue Board may display Not a Fit as Downvote in required-review and voting controls while preserving the internal `not_a_fit` vote value.
 
 The interface must not allow a bare acknowledgement such as "mark reviewed" to satisfy the review-unlock requirement.
 
@@ -838,7 +1103,7 @@ A proposal enters **Moderation-Watch** if any of the following are true:
 
 A proposal enters **High Moderation-Watch** if any of the following are true:
 
-* unsafe_count / total_count >= 35%
+* unsafe_count / total_count >= 50%
 * unsafe_count >= 8
 
 ### 19.3 Moderator action threshold rule
@@ -909,6 +1174,22 @@ A proposal may be archived when, after reaching the required moderation threshol
 * failure to meet minimum quality threshold
 * superseded by merge or other cycle logic
 * routine cycle close
+
+Canonical stored archive reason codes:
+
+* `duplicate`
+* `unsafe_illegal_deceptive`
+* `spam_abuse`
+* `irrelevant`
+* `minimum_quality`
+* `superseded`
+* `moderation`
+* `manual_archive`
+* `not_a_fit`
+* `merged`
+* `cycle_closed`
+
+The moderator archive endpoint accepts only active moderation reasons. `merged` and `cycle_closed` are reserved system lifecycle reasons and must not be selectable as ordinary moderator archive reasons.
 
 ### 21.3 Archive Board voting behavior
 
@@ -1050,6 +1331,12 @@ At cycle close, the top valid solution proposal under the active issue is select
 
 If there is no published winning issue from a prior cycle, the Solution Board has no valid target and resolves with no solution winner.
 
+Cycle result status values in v1 are:
+
+* `resolved` - a ranked winner exists and was published
+* `no_ranked_winner` - eligible candidates existed or the board was open, but no candidate met ranked-winner requirements
+* `no_solution_target` - the Solution Board had no prior winning issue to solve
+
 ### 26.3 Winning solution transition
 
 The winning solution must become an implementation tracking record without requiring re-entry of structured implementation data.
@@ -1115,6 +1402,10 @@ The system must conceptually support at least the following entities:
 * ImplementationResourceEntry
 * CompletionCriterion
 * StatusUpdate / ProofNote
+* BuildProvenanceManifest
+* LocaleRegistryEntry
+* DeploymentAttestation
+* BootstrapModeratorToken
 
 Exact schema design may normalize or combine some of these, but the concept boundaries must remain supported.
 
@@ -1126,6 +1417,10 @@ Version 1 should prioritize:
 
 * auditability
 * deterministic rule application
+* public build provenance for the canonical deployment
+* easy relocalization from the public repository
+* simple first-moderator bootstrap for new locale deployments
+* clear separation of AGPL software rights from official brand rights
 * low operational cost
 * low moderation ambiguity where possible
 * hidden live-score surfaces

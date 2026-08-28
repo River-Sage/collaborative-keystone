@@ -17,6 +17,23 @@ Forks and derivatives must not present themselves as the official Collaborative 
 
 If you create a fork or derivative deployment, you must provide clear attribution to the original project and clearly distinguish your version from the official project.
 
+The intended public deployment pattern is `{Locale} Keystone`: for example, `World Keystone`, `Castle Rock Keystone`, or `Douglas County Keystone`.
+
+Users should access locale-specific deployments through the central global Keystone site, which should eventually provide the trusted locale directory and verification registry.
+
+The central official instance should eventually publish signed build provenance so users and auditors can verify that it is running an official release. Community deployments may run the software, but they should clearly show whether they are official, authorized, or community-operated.
+
+Current locale deployments are configured through environment variables such as `CK_LOCALE_SLUG`, `CK_LOCALE_NAME`, `PUBLIC_WEB_ORIGIN`, `PUBLIC_API_ORIGIN`, and `CK_REGISTRY_STATUS`. The API creates the configured locale on startup and scopes the active app flow to that locale. See `docs/locale-operator-quickstart.md` for running `World Keystone` and `Castle Rock Keystone` side by side.
+
+For planning purposes, the project distinguishes:
+
+- **Keystone Core**: the public AGPL software and requirements
+- **Global Keystone**: the canonical hosted entry point and locale registry
+- **Locale Keystone Distribution**: a signed easy-spin-up package for locale operators
+- **Community Forks**: modified or independently operated deployments that are not verified as official
+
+Signed releases and manifests prove official provenance. Private environment secrets protect a running deployment. Encryption must not be used to block the source availability required by the software license.
+
 ## Mission
 
 Focus human attention, organize human effort, and turn shared concern into coordinated action.
@@ -151,7 +168,9 @@ Later versions may add:
 
 - Platform Improvement Board
 - Governance / Rules Board
-- fork guides for city/state/country/world instances
+- setup guides for city/state/country/world instances
+- global locale directory and verification registry
+- signed build provenance for the central official instance
 - richer execution tracking
 - stronger trust tiers for participation
 - public governance processes for changing site rules
@@ -185,6 +204,10 @@ See `docs/deployment.md` for the dev-machine move, environment examples, and Clo
 docs/
   deployment.md
   foundation.md
+  locale-registry-statuses.md
+  locale-operator-quickstart.md
+  operator-agreement-template.md
+  release-signing-and-provenance.md
   rules.md
   technical-spec-v1.md
 README.md

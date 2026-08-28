@@ -17,7 +17,6 @@ pub struct MyQueueProposal {
     pub id: Uuid,
     pub board_code: String,
     pub title: String,
-    pub author_user_id: Uuid,
     #[serde(skip_serializing)]
     pub eligible_for_review_unlock: bool,
     pub is_archived: bool,
@@ -57,7 +56,6 @@ pub async fn my_review_queues_handler(
             b.code AS board_code,
             p.title,
             p.primary_state,
-            p.author_user_id,
             p.support_count,
             p.not_a_fit_count,
             p.unclear_count,
@@ -94,7 +92,7 @@ pub async fn my_review_queues_handler(
                     OR (
                         (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count) > 0
                         AND p.unsafe_count::numeric
-                            / (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count)::numeric >= 0.35
+                            / (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count)::numeric >= 0.50
                     )
                   )
             ) AS reconsideration_moderation_due,
@@ -112,7 +110,7 @@ pub async fn my_review_queues_handler(
         LEFT JOIN review_actions ra
             ON ra.proposal_id = p.id
            AND ra.user_id = $1
-        WHERE l.slug = 'world'
+        WHERE l.slug = $2
           AND c.is_active = TRUE
           AND p.author_user_id <> $1
           AND b.code IN ('issue', 'solution')
@@ -120,6 +118,7 @@ pub async fn my_review_queues_handler(
         "#,
     )
     .bind(auth_user.user_id)
+    .bind(&state.locale.slug)
     .fetch_all(&state.db)
     .await
     .map_err(|err| {
@@ -196,7 +195,6 @@ fn map_my_queue_row(row: sqlx::postgres::PgRow) -> Result<MyQueueProposal, AppEr
         id: row.try_get("id").map_err(internal_db_err)?,
         board_code: row.try_get("board_code").map_err(internal_db_err)?,
         title: row.try_get("title").map_err(internal_db_err)?,
-        author_user_id: row.try_get("author_user_id").map_err(internal_db_err)?,
         eligible_for_review_unlock,
         is_archived: primary_state == "archived",
 
@@ -236,7 +234,7 @@ fn excluded_from_review_credit(
 
     negative_count > 8 * support_count.max(1)
         || unsafe_count >= 8
-        || fraction_at_least(unsafe_count, total_count, 0.35)
+        || fraction_at_least(unsafe_count, total_count, 0.50)
 }
 
 fn fraction_at_least(part: i32, total: i32, threshold: f64) -> bool {

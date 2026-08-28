@@ -2,6 +2,7 @@ use chrono::{Duration, Utc};
 use dotenvy::dotenv;
 use serde_json::{Value, json};
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
+use std::path::PathBuf;
 use uuid::Uuid;
 
 const SEED_PASSWORD_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$ZGVtby1zZWVkLXNvdXJjZQ$1P+4nXhC2qVz6S2nUijQwzGxg8k0Uo4QyPvH8Dg6S1A";
@@ -40,10 +41,52 @@ struct ActiveCycle {
     cycle_number: i32,
 }
 
+struct SeedLocale {
+    slug: String,
+    name: String,
+}
+
+impl SeedLocale {
+    fn from_env() -> Self {
+        let slug = std::env::var("CK_LOCALE_SLUG")
+            .ok()
+            .map(|value| normalize_slug(&value))
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "world".to_string());
+        let name = std::env::var("CK_LOCALE_NAME")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| {
+                if slug == "world" {
+                    "World".to_string()
+                } else {
+                    slug.split('-')
+                        .filter(|part| !part.is_empty())
+                        .map(|part| {
+                            let mut chars = part.chars();
+                            match chars.next() {
+                                Some(first) => {
+                                    first.to_ascii_uppercase().to_string()
+                                        + chars.as_str().to_ascii_lowercase().as_str()
+                                }
+                                None => String::new(),
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                }
+            });
+
+        Self { slug, name }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenv().ok();
 
+    let locale = SeedLocale::from_env();
     let database_url =
         std::env::var("DATABASE_URL").expect("DATABASE_URL must be set in site/api/.env");
     let db = PgPoolOptions::new()
@@ -51,9 +94,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .connect(&database_url)
         .await?;
 
-    sqlx::migrate!("../db/migrations").run(&db).await?;
+    let migrations = sqlx::migrate::Migrator::new(migrations_path().as_path()).await?;
+    migrations.run(&db).await?;
 
-    let active_cycle = ensure_active_cycle(&db).await?;
+    let active_cycle = ensure_active_cycle(&db, &locale).await?;
     let issue_board_id = board_id(&db, "issue").await?;
     let solution_board_id = board_id(&db, "solution").await?;
 
@@ -78,7 +122,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             problem_description: Some(
                 "Many communities still lack reliable access to safe drinking water and clear local reporting.",
             ),
-            affected_scope: Some("Rural and low-income communities across the World locale."),
+            affected_scope: Some("Rural and low-income communities across the current locale."),
             why_it_matters: Some(
                 "Water access affects health, education, local economies, and emergency resilience.",
             ),
@@ -443,6 +487,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn normalize_slug(value: &str) -> String {
+    let mut output = String::new();
+    let mut previous_was_dash = false;
+
+    for ch in value.trim().chars().flat_map(char::to_lowercase) {
+        let next = if ch.is_ascii_alphanumeric() {
+            Some(ch)
+        } else if ch == '-' || ch == '_' || ch.is_whitespace() {
+            Some('-')
+        } else {
+            None
+        };
+
+        if let Some(next) = next {
+            if next == '-' {
+                if output.is_empty() || previous_was_dash {
+                    continue;
+                }
+                previous_was_dash = true;
+            } else {
+                previous_was_dash = false;
+            }
+            output.push(next);
+        }
+    }
+
+    output.trim_matches('-').to_string()
+}
+
+fn migrations_path() -> PathBuf {
+    std::env::var("CK_MIGRATIONS_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("../db/migrations"))
+}
+
 struct Counts {
     support: i32,
     not_a_fit: i32,
@@ -472,18 +551,35 @@ async fn load_counts(db: &PgPool, proposal_id: Uuid) -> Result<Counts, sqlx::Err
     })
 }
 
-async fn ensure_active_cycle(db: &PgPool) -> Result<ActiveCycle, sqlx::Error> {
+async fn ensure_active_cycle(db: &PgPool, locale: &SeedLocale) -> Result<ActiveCycle, sqlx::Error> {
+    let locale_id: Uuid = sqlx::query(
+        r#"
+        INSERT INTO locales (slug, name, is_active)
+        VALUES ($1, $2, TRUE)
+        ON CONFLICT (slug)
+        DO UPDATE SET
+            name = EXCLUDED.name,
+            is_active = TRUE
+        RETURNING id
+        "#,
+    )
+    .bind(&locale.slug)
+    .bind(&locale.name)
+    .fetch_one(db)
+    .await?
+    .try_get("id")?;
+
     let row = sqlx::query(
         r#"
         SELECT c.id, c.locale_id, c.cycle_number
         FROM cycles c
-        JOIN locales l ON l.id = c.locale_id
-        WHERE l.slug = 'world'
+        WHERE c.locale_id = $1
           AND c.is_active = TRUE
         ORDER BY c.created_at DESC
         LIMIT 1
         "#,
     )
+    .bind(locale_id)
     .fetch_optional(db)
     .await?;
 
@@ -495,10 +591,6 @@ async fn ensure_active_cycle(db: &PgPool) -> Result<ActiveCycle, sqlx::Error> {
         });
     }
 
-    let locale_id: Uuid = sqlx::query("SELECT id FROM locales WHERE slug = 'world' LIMIT 1")
-        .fetch_one(db)
-        .await?
-        .try_get("id")?;
     let starts_at = Utc::now();
     let row = sqlx::query(
         r#"
@@ -609,7 +701,7 @@ async fn ensure_solution_target_issue(
         None,
         "DEMO PRIOR WINNER: Clean water as current solution target",
         Some("Prior-cycle winning issue used to make the current Solution Board active."),
-        Some("World"),
+        Some("Current locale"),
         Some("Seeded so solution proposals have a valid published target."),
         None,
         None,
@@ -1163,7 +1255,7 @@ async fn refresh_vote_counts(db: &PgPool, proposal_id: Uuid) -> Result<(), sqlx:
                   OR (
                     (counts.support_count + counts.not_a_fit_count + counts.unclear_count + counts.unsafe_count + counts.merge_count) > 0
                     AND counts.unsafe_count::numeric
-                        / (counts.support_count + counts.not_a_fit_count + counts.unclear_count + counts.unsafe_count + counts.merge_count)::numeric >= 0.35
+                        / (counts.support_count + counts.not_a_fit_count + counts.unclear_count + counts.unsafe_count + counts.merge_count)::numeric >= 0.50
                   )
                 THEN COALESCE(p.high_moderation_watch_started_at, NOW())
                 ELSE NULL

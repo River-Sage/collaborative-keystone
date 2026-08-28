@@ -13,7 +13,7 @@ use tracing::error;
 use uuid::Uuid;
 
 use crate::{
-    AppState, anti_abuse, auth::AuthUser, cycles::open_next_world_cycle_after_resolution,
+    AppState, anti_abuse, auth::AuthUser, cycles::open_next_locale_cycle_after_resolution,
     error::AppError, executions::create_execution_record_from_solution, notifications,
     reconsiderations::resolve_cleared_reconsiderations, review_actions::ensure_submit_unlocked,
 };
@@ -57,7 +57,6 @@ pub struct CreateProposalResponse {
     pub proposal_id: Uuid,
     pub board_code: String,
     pub title: String,
-    pub author_user_id: Uuid,
     pub cycle_id: Uuid,
     pub locale_id: Uuid,
 }
@@ -139,7 +138,6 @@ pub struct CycleResultSummary {
     pub result_status: String,
     pub winning_proposal_id: Option<Uuid>,
     pub execution_record_id: Option<Uuid>,
-    pub resolved_by_moderator_user_id: Option<Uuid>,
     pub result_snapshot: Value,
     pub published_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
@@ -163,9 +161,39 @@ pub struct CycleOutcomeCandidate {
 #[derive(Debug, Serialize)]
 pub struct ReviewQueueItem {
     #[serde(flatten)]
-    pub proposal: ProposalSummary,
+    pub proposal: ModeratorReviewProposalSummary,
     pub review_reason: String,
+    pub threshold_signal: Option<ThresholdSignalSummary>,
     pub merge_relationships: ProposalMergeRelationships,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ThresholdSignalSummary {
+    pub label: String,
+    pub metrics: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ModeratorReviewProposalSummary {
+    pub id: Uuid,
+    pub board_code: String,
+    pub title: String,
+    pub primary_state: String,
+    pub parent_issue_proposal_id: Option<Uuid>,
+    pub merged_into_proposal_id: Option<Uuid>,
+    pub archived_reason: Option<String>,
+    pub moderation_note: Option<String>,
+
+    pub problem_description: Option<String>,
+    pub affected_scope: Option<String>,
+    pub why_it_matters: Option<String>,
+
+    pub action_description: Option<String>,
+    pub required_resource_categories: Option<Value>,
+    pub completion_criteria: Option<Value>,
+    pub execution_tracking_entries: Option<Value>,
+
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -260,6 +288,7 @@ pub struct ProposalSummary {
     pub board_code: String,
     pub title: String,
     pub primary_state: String,
+    #[serde(skip_serializing)]
     pub author_user_id: Uuid,
     pub parent_issue_proposal_id: Option<Uuid>,
     pub merged_into_proposal_id: Option<Uuid>,
@@ -291,11 +320,9 @@ pub struct ProposalSummary {
     pub cycle_average_review_action_count: f64,
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Clone)]
 pub struct ReviewPoolProposal {
-    #[serde(flatten)]
     pub proposal: ProposalSummary,
-    pub review_bucket: String,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -303,7 +330,7 @@ pub struct PublicProposalSummary {
     pub id: Uuid,
     pub board_code: String,
     pub title: String,
-    pub author_user_id: Uuid,
+    pub current_user_is_author: bool,
     pub parent_issue_proposal_id: Option<Uuid>,
     pub merged_into_proposal_id: Option<Uuid>,
     pub is_archived: bool,
@@ -323,12 +350,14 @@ pub struct PublicProposalSummary {
 }
 
 impl ProposalSummary {
-    fn to_public(self) -> PublicProposalSummary {
+    fn to_public(self, current_user_id: Uuid) -> PublicProposalSummary {
+        let current_user_is_author = self.author_user_id == current_user_id;
+
         PublicProposalSummary {
             id: self.id,
             board_code: self.board_code,
             title: self.title,
-            author_user_id: self.author_user_id,
+            current_user_is_author,
             parent_issue_proposal_id: self.parent_issue_proposal_id,
             merged_into_proposal_id: self.merged_into_proposal_id,
             is_archived: self.primary_state == "archived",
@@ -341,6 +370,27 @@ impl ProposalSummary {
             required_resource_categories: self.required_resource_categories,
             completion_criteria: self.completion_criteria,
             execution_tracking_entries: self.execution_tracking_entries,
+            created_at: self.created_at,
+        }
+    }
+
+    fn to_moderator_review_summary(&self) -> ModeratorReviewProposalSummary {
+        ModeratorReviewProposalSummary {
+            id: self.id,
+            board_code: self.board_code.clone(),
+            title: self.title.clone(),
+            primary_state: self.primary_state.clone(),
+            parent_issue_proposal_id: self.parent_issue_proposal_id,
+            merged_into_proposal_id: self.merged_into_proposal_id,
+            archived_reason: self.archived_reason.clone(),
+            moderation_note: self.moderation_note.clone(),
+            problem_description: self.problem_description.clone(),
+            affected_scope: self.affected_scope.clone(),
+            why_it_matters: self.why_it_matters.clone(),
+            action_description: self.action_description.clone(),
+            required_resource_categories: self.required_resource_categories.clone(),
+            completion_criteria: self.completion_criteria.clone(),
+            execution_tracking_entries: self.execution_tracking_entries.clone(),
             created_at: self.created_at,
         }
     }
@@ -364,7 +414,6 @@ pub struct ModeratorActionSummary {
     pub proposal_id: Uuid,
     pub related_proposal_id: Option<Uuid>,
     pub related_proposal_title: Option<String>,
-    pub moderator_user_id: Option<Uuid>,
     pub action_reason: Option<String>,
     pub public_note: Option<String>,
     pub created_at: DateTime<Utc>,
@@ -393,7 +442,6 @@ pub struct ProposalMergeRelationship {
 
 #[derive(Debug, Serialize)]
 pub struct ProposalMergeRelationshipNote {
-    pub author_user_id: Uuid,
     pub difference_type: String,
     pub note_text: String,
     pub created_at: String,
@@ -463,6 +511,7 @@ struct SentimentVoteReconciliation {
 struct ActiveCycle {
     summary: CycleSummary,
     locale_id: Uuid,
+    locale_slug: String,
     can_resolve: bool,
 }
 
@@ -484,7 +533,7 @@ impl ProposalCounts {
     }
 
     fn high_moderation_watch(&self) -> bool {
-        self.unsafe_count >= 8 || fraction_at_least(self.unsafe_count, self.total_count(), 0.35)
+        self.unsafe_count >= 8 || fraction_at_least(self.unsafe_count, self.total_count(), 0.50)
     }
 
     fn merge_watch(&self) -> bool {
@@ -508,6 +557,48 @@ impl ProposalCounts {
             "non_merge_count": self.non_merge_count(),
             "total_count": self.total_count()
         })
+    }
+}
+
+fn build_threshold_signal(
+    review_reason: &str,
+    counts: &ProposalCounts,
+) -> Option<ThresholdSignalSummary> {
+    match review_reason {
+        "high_moderation_hold" | "high_moderation_review" => Some(ThresholdSignalSummary {
+            label: "Moderation threshold".to_string(),
+            metrics: vec![
+                format!("Unsafe flags: {}", counts.unsafe_count),
+                format!("Total signals: {}", counts.total_count()),
+            ],
+        }),
+        "moderation_watch_review" => {
+            let negative_dominance = counts.non_merge_count() >= 10
+                && counts.negative_count() > 8 * counts.support.max(1);
+
+            Some(ThresholdSignalSummary {
+                label: "Moderation watch".to_string(),
+                metrics: if negative_dominance {
+                    vec![
+                        format!("Negative signals: {}", counts.negative_count()),
+                        format!("Non-duplicate signals: {}", counts.non_merge_count()),
+                    ]
+                } else {
+                    vec![
+                        format!("Unsafe flags: {}", counts.unsafe_count),
+                        format!("Total signals: {}", counts.total_count()),
+                    ]
+                },
+            })
+        }
+        "merge_review" => Some(ThresholdSignalSummary {
+            label: "Duplicate threshold".to_string(),
+            metrics: vec![
+                format!("Duplicate flags: {}", counts.merge_count),
+                format!("Total signals: {}", counts.total_count()),
+            ],
+        }),
+        _ => None,
     }
 }
 
@@ -561,42 +652,28 @@ pub async fn create_proposal_handler(
             ));
         }
 
-        require_quality_text(
+        require_submission_text(
             &payload.problem_description,
             "Problem description",
-            20,
-            4,
             MAX_LONG_TEXT_CHARS,
         )?;
-        require_quality_text(
-            &payload.affected_scope,
-            "Affected scope",
-            8,
-            2,
-            MAX_SCOPE_CHARS,
-        )?;
-        require_quality_text(
+        require_submission_text(&payload.affected_scope, "Affected scope", MAX_SCOPE_CHARS)?;
+        require_submission_text(
             &payload.why_it_matters,
             "Why it matters",
-            20,
-            4,
             MAX_LONG_TEXT_CHARS,
         )?;
     }
 
     if board_code == "solution" {
-        require_quality_text(
+        require_submission_text(
             &payload.action_description,
             "Action description",
-            20,
-            4,
             MAX_LONG_TEXT_CHARS,
         )?;
-        require_quality_text(
+        require_submission_text(
             &payload.why_it_matters,
             "Why this solves it",
-            20,
-            4,
             MAX_SOLUTION_FIT_CHARS,
         )?;
 
@@ -616,12 +693,13 @@ pub async fn create_proposal_handler(
         SELECT c.id AS cycle_id, c.locale_id
         FROM cycles c
         JOIN locales l ON l.id = c.locale_id
-        WHERE l.slug = 'world'
+        WHERE l.slug = $1
           AND c.is_active = TRUE
         ORDER BY c.created_at DESC
         LIMIT 1
         "#,
     )
+    .bind(&state.locale.slug)
     .fetch_optional(&state.db)
     .await
     .map_err(|err| {
@@ -727,7 +805,6 @@ pub async fn create_proposal_handler(
         proposal_id: inserted.try_get("id").map_err(internal_db_err)?,
         board_code,
         title,
-        author_user_id: auth_user.user_id,
         cycle_id,
         locale_id,
     };
@@ -937,6 +1014,7 @@ fn filter_solution_proposals_for_target(
 
 pub async fn list_proposals_handler(
     State(state): State<Arc<AppState>>,
+    auth_user: AuthUser,
     Query(query): Query<ListProposalsQuery>,
 ) -> Result<Json<ListProposalsResponse>, AppError> {
     resolve_cleared_reconsiderations(&state.db).await?;
@@ -952,14 +1030,21 @@ pub async fn list_proposals_handler(
     }
 
     let rows = if board_code_filter.as_deref() == Some("archive") {
-        fetch_archived_proposals(&state.db).await?
+        fetch_archived_proposals(&state.db, &state.locale.slug).await?
     } else {
-        fetch_proposals(&state.db, board_code_filter.as_deref(), false, None).await?
+        fetch_proposals(
+            &state.db,
+            &state.locale.slug,
+            board_code_filter.as_deref(),
+            false,
+            None,
+        )
+        .await?
     };
 
     let mut proposals = map_proposal_rows(rows)?;
     if board_code_filter.as_deref() == Some("solution") {
-        let cycle = load_active_world_cycle(&state.db).await?;
+        let cycle = load_active_locale_cycle(&state.db, &state.locale.slug).await?;
         let solution_target_issue_id =
             load_solution_board_target_issue_id(&state.db, &cycle).await?;
         proposals = filter_solution_proposals_for_target(proposals, solution_target_issue_id);
@@ -974,7 +1059,7 @@ pub async fn list_proposals_handler(
 
     let proposals = proposals
         .into_iter()
-        .map(ProposalSummary::to_public)
+        .map(|proposal| proposal.to_public(auth_user.user_id))
         .collect();
 
     Ok(Json(ListProposalsResponse {
@@ -1045,16 +1130,19 @@ pub async fn get_proposal_handler(
         LEFT JOIN proposal_sentiment_votes sv
           ON sv.proposal_id = p.id
          AND sv.user_id = $2
+         AND p.author_user_id <> $2
         LEFT JOIN proposal_merge_votes mv
           ON mv.proposal_id = p.id
          AND mv.user_id = $2
+         AND p.author_user_id <> $2
         WHERE p.id = $1
-          AND l.slug = 'world'
+          AND l.slug = $3
         LIMIT 1
         "#,
     )
     .bind(proposal_id)
     .bind(auth_user.user_id)
+    .bind(&state.locale.slug)
     .fetch_optional(&state.db)
     .await
     .map_err(|err| {
@@ -1076,7 +1164,7 @@ pub async fn get_proposal_handler(
         .try_get("current_user_merge_target_proposal_id")
         .map_err(internal_db_err)?;
     let proposal = map_one_proposal_row(row)?;
-    let public_proposal = proposal.to_public();
+    let public_proposal = proposal.to_public(auth_user.user_id);
     let merge_relationships = load_merge_relationships(&state.db, proposal_id, false).await?;
     let moderator_actions = load_moderator_actions(&state.db, proposal_id).await?;
 
@@ -1142,20 +1230,22 @@ pub async fn execute_merge_handler(
                     OR (
                         (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count) > 0
                         AND p.unsafe_count::numeric
-                            / (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count)::numeric >= 0.35
+                            / (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count)::numeric >= 0.50
                     )
                   )
             ) AS reconsideration_window_open
         FROM proposals p
         JOIN boards b ON b.id = p.board_id
-        WHERE p.id = $1
-           OR p.id = $2
+        JOIN locales l ON l.id = p.locale_id
+        WHERE (p.id = $1 OR p.id = $2)
+          AND l.slug = $3
         ORDER BY p.id
         FOR UPDATE
         "#,
     )
     .bind(payload.source_proposal_id)
     .bind(payload.target_proposal_id)
+    .bind(&state.locale.slug)
     .fetch_all(&mut *tx)
     .await
     .map_err(|err| {
@@ -1404,13 +1494,9 @@ pub async fn moderate_archive_handler(
 
     let archived_reason = payload.archived_reason.trim().to_lowercase();
 
-    if archived_reason != "moderation"
-        && archived_reason != "manual_archive"
-        && archived_reason != "irrelevant"
-        && archived_reason != "not_a_fit"
-    {
+    if !is_valid_archive_reason(&archived_reason) {
         return Err(AppError::BadRequest(
-            "archived_reason must be one of: moderation, manual_archive, irrelevant, not_a_fit."
+            "archived_reason must be one of: duplicate, unsafe_illegal_deceptive, spam_abuse, irrelevant, minimum_quality, superseded, moderation, manual_archive, not_a_fit."
                 .to_string(),
         ));
     }
@@ -1450,16 +1536,19 @@ pub async fn moderate_archive_handler(
                     OR (
                         (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count) > 0
                         AND p.unsafe_count::numeric
-                            / (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count)::numeric >= 0.35
+                            / (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count)::numeric >= 0.50
                     )
                   )
             ) AS reconsideration_window_open
         FROM proposals p
+        JOIN locales l ON l.id = p.locale_id
         WHERE p.id = $1
+          AND l.slug = $2
         LIMIT 1
         "#,
     )
     .bind(payload.proposal_id)
+    .bind(&state.locale.slug)
     .fetch_optional(&state.db)
     .await
     .map_err(|err| {
@@ -1612,16 +1701,19 @@ pub async fn moderate_freeze_handler(
                     OR (
                         (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count) > 0
                         AND p.unsafe_count::numeric
-                            / (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count)::numeric >= 0.35
+                            / (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count)::numeric >= 0.50
                     )
                   )
             ) AS reconsideration_window_open
         FROM proposals p
+        JOIN locales l ON l.id = p.locale_id
         WHERE p.id = $1
+          AND l.slug = $2
         LIMIT 1
         "#,
     )
     .bind(payload.proposal_id)
+    .bind(&state.locale.slug)
     .fetch_optional(&state.db)
     .await
     .map_err(|err| {
@@ -1763,11 +1855,14 @@ pub async fn moderate_unfreeze_handler(
                   AND wf.cleared_at IS NULL
             ) AS frozen_for_review
         FROM proposals p
+        JOIN locales l ON l.id = p.locale_id
         WHERE p.id = $1
+          AND l.slug = $2
         LIMIT 1
         "#,
     )
     .bind(payload.proposal_id)
+    .bind(&state.locale.slug)
     .fetch_optional(&state.db)
     .await
     .map_err(|err| {
@@ -1892,16 +1987,19 @@ pub async fn moderate_reviewed_active_handler(
                     OR (
                         (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count) > 0
                         AND p.unsafe_count::numeric
-                            / (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count)::numeric >= 0.35
+                            / (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count)::numeric >= 0.50
                     )
                   )
             ) AS reconsideration_window_open
         FROM proposals p
+        JOIN locales l ON l.id = p.locale_id
         WHERE p.id = $1
+          AND l.slug = $2
         LIMIT 1
         "#,
     )
     .bind(payload.proposal_id)
+    .bind(&state.locale.slug)
     .fetch_optional(&state.db)
     .await
     .map_err(|err| {
@@ -2031,6 +2129,7 @@ pub async fn review_pool_handler(
 
     let rows = fetch_reviewable_proposals_for_user(
         &state.db,
+        &state.locale.slug,
         auth_user.user_id,
         board_code_filter.as_deref(),
     )
@@ -2042,7 +2141,7 @@ pub async fn review_pool_handler(
     let returned_count = selected.len();
     let proposals = selected
         .into_iter()
-        .map(|item| item.proposal.to_public())
+        .map(|item| item.proposal.to_public(auth_user.user_id))
         .collect();
 
     Ok(Json(ReviewPoolResponse {
@@ -2110,7 +2209,7 @@ pub async fn review_queue_handler(
         JOIN boards b ON b.id = p.board_id
         JOIN cycles c ON c.id = p.cycle_id
         JOIN locales l ON l.id = p.locale_id
-        WHERE l.slug = 'world'
+        WHERE l.slug = $1
           AND c.is_active = TRUE
           AND p.primary_state = 'active'
           AND NOT EXISTS (
@@ -2137,7 +2236,7 @@ pub async fn review_queue_handler(
                 OR (
                     (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count) > 0
                     AND p.unsafe_count::numeric
-                        / (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count)::numeric >= 0.35
+                        / (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count)::numeric >= 0.50
                 )
                 OR (
                     (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count) >= 8
@@ -2192,6 +2291,7 @@ pub async fn review_queue_handler(
         ORDER BY p.merge_count DESC, p.not_a_fit_count DESC, p.unsafe_count DESC, p.created_at ASC
         "#,
     )
+    .bind(&state.locale.slug)
     .fetch_all(&state.db)
     .await
     .map_err(|err| {
@@ -2223,10 +2323,12 @@ pub async fn review_queue_handler(
         } else {
             "relationship_review".to_string()
         };
+        let threshold_signal = build_threshold_signal(&review_reason, &counts);
 
         items.push(ReviewQueueItem {
-            proposal,
+            proposal: proposal.to_moderator_review_summary(),
             review_reason,
+            threshold_signal,
             merge_relationships: relationships,
         });
     }
@@ -2244,10 +2346,21 @@ pub async fn current_cycle_outcome_handler(
     require_moderator(&auth_user)?;
     resolve_cleared_reconsiderations(&state.db).await?;
 
-    let cycle = load_active_world_cycle(&state.db).await?;
-    let issue_rows = fetch_proposals_for_cycle(&state.db, cycle.summary.id, Some("issue")).await?;
-    let solution_rows =
-        fetch_proposals_for_cycle(&state.db, cycle.summary.id, Some("solution")).await?;
+    let cycle = load_active_locale_cycle(&state.db, &state.locale.slug).await?;
+    let issue_rows = fetch_proposals_for_cycle(
+        &state.db,
+        &state.locale.slug,
+        cycle.summary.id,
+        Some("issue"),
+    )
+    .await?;
+    let solution_rows = fetch_proposals_for_cycle(
+        &state.db,
+        &state.locale.slug,
+        cycle.summary.id,
+        Some("solution"),
+    )
+    .await?;
     let solution_target_issue_id = load_solution_board_target_issue_id(&state.db, &cycle).await?;
 
     let issue_candidates = build_cycle_outcome_candidates(map_proposal_rows(issue_rows)?);
@@ -2255,7 +2368,8 @@ pub async fn current_cycle_outcome_handler(
         map_proposal_rows(solution_rows)?,
         solution_target_issue_id,
     ));
-    let results = load_cycle_results(&state.db, Some(cycle.summary.id), false).await?;
+    let results =
+        load_cycle_results(&state.db, &state.locale.slug, Some(cycle.summary.id), false).await?;
 
     let issue_winner_proposal_id = issue_candidates
         .iter()
@@ -2280,8 +2394,9 @@ pub async fn current_cycle_outcome_handler(
 
 pub async fn published_cycle_results_handler(
     State(state): State<Arc<AppState>>,
+    _auth_user: AuthUser,
 ) -> Result<Json<CycleResultsResponse>, AppError> {
-    let results = load_cycle_results(&state.db, None, true).await?;
+    let results = load_cycle_results(&state.db, &state.locale.slug, None, true).await?;
 
     Ok(Json(CycleResultsResponse { ok: true, results }))
 }
@@ -2293,7 +2408,7 @@ pub async fn resolve_current_cycle_outcomes_handler(
     require_moderator(&auth_user)?;
     resolve_cleared_reconsiderations(&state.db).await?;
 
-    let cycle = load_active_world_cycle(&state.db).await?;
+    let cycle = load_active_locale_cycle(&state.db, &state.locale.slug).await?;
     if !cycle.can_resolve {
         return Err(AppError::Forbidden(
             "Current cycle cannot be resolved until voting has closed.".to_string(),
@@ -2308,12 +2423,13 @@ pub async fn resolve_current_cycle_outcomes_handler(
     let results = vec![issue_result, solution_result];
     let archived_proposal_count =
         archive_active_cycle_proposals(&state.db, &cycle, auth_user.user_id).await?;
-    let next_cycle_id = open_next_world_cycle_after_resolution(&state.db, cycle.summary.id)
-        .await
-        .map_err(|err| {
-            error!("database error opening next cycle: {}", err);
-            AppError::Internal("Failed to open the next cycle.".to_string())
-        })?;
+    let next_cycle_id =
+        open_next_locale_cycle_after_resolution(&state.db, cycle.summary.id, &state.locale.slug)
+            .await
+            .map_err(|err| {
+                error!("database error opening next cycle: {}", err);
+                AppError::Internal("Failed to open the next cycle.".to_string())
+            })?;
 
     Ok((
         StatusCode::OK,
@@ -2446,6 +2562,7 @@ async fn archive_active_cycle_proposals(
 
 async fn fetch_proposals(
     db: &sqlx::PgPool,
+    locale_slug: &str,
     board_code_filter: Option<&str>,
     least_exposed_first: bool,
     limit: Option<i64>,
@@ -2462,7 +2579,7 @@ async fn fetch_proposals(
         "#
     };
 
-    let limit_clause = if limit.is_some() { "LIMIT $2" } else { "" };
+    let limit_clause = if limit.is_some() { "LIMIT $3" } else { "" };
 
     let sql = format!(
         r#"
@@ -2514,10 +2631,10 @@ async fn fetch_proposals(
         JOIN boards b ON b.id = p.board_id
         JOIN cycles c ON c.id = p.cycle_id
         JOIN locales l ON l.id = p.locale_id
-        WHERE l.slug = 'world'
+        WHERE l.slug = $1
           AND c.is_active = TRUE
           AND p.primary_state = 'active'
-          AND ($1::text IS NULL OR b.code = $1)
+          AND ($2::text IS NULL OR b.code = $2)
           AND NOT EXISTS (
                 SELECT 1
                 FROM proposal_watch_flags wf
@@ -2536,7 +2653,7 @@ async fn fetch_proposals(
                     OR (
                         (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count) > 0
                         AND p.unsafe_count::numeric
-                            / (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count)::numeric >= 0.35
+                            / (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count)::numeric >= 0.50
                     )
                   )
               )
@@ -2545,7 +2662,7 @@ async fn fetch_proposals(
         "#
     );
 
-    let mut query_builder = sqlx::query(&sql).bind(board_code_filter);
+    let mut query_builder = sqlx::query(&sql).bind(locale_slug).bind(board_code_filter);
 
     if let Some(limit) = limit {
         query_builder = query_builder.bind(limit);
@@ -2559,6 +2676,7 @@ async fn fetch_proposals(
 
 async fn fetch_proposals_for_cycle(
     db: &sqlx::PgPool,
+    locale_slug: &str,
     cycle_id: Uuid,
     board_code_filter: Option<&str>,
 ) -> Result<Vec<sqlx::postgres::PgRow>, AppError> {
@@ -2611,10 +2729,10 @@ async fn fetch_proposals_for_cycle(
         FROM proposals p
         JOIN boards b ON b.id = p.board_id
         JOIN locales l ON l.id = p.locale_id
-        WHERE l.slug = 'world'
-          AND p.cycle_id = $1
+        WHERE l.slug = $1
+          AND p.cycle_id = $2
           AND p.primary_state = 'active'
-          AND ($2::text IS NULL OR b.code = $2)
+          AND ($3::text IS NULL OR b.code = $3)
           AND NOT EXISTS (
                 SELECT 1
                 FROM proposal_watch_flags wf
@@ -2633,13 +2751,14 @@ async fn fetch_proposals_for_cycle(
                     OR (
                         (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count) > 0
                         AND p.unsafe_count::numeric
-                            / (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count)::numeric >= 0.35
+                            / (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count)::numeric >= 0.50
                     )
                   )
               )
         ORDER BY p.created_at DESC
         "#,
     )
+    .bind(locale_slug)
     .bind(cycle_id)
     .bind(board_code_filter)
     .fetch_all(db)
@@ -2650,12 +2769,16 @@ async fn fetch_proposals_for_cycle(
     })
 }
 
-async fn load_active_world_cycle(db: &sqlx::PgPool) -> Result<ActiveCycle, AppError> {
+async fn load_active_locale_cycle(
+    db: &sqlx::PgPool,
+    locale_slug: &str,
+) -> Result<ActiveCycle, AppError> {
     let row = sqlx::query(
         r#"
         SELECT
             c.id,
             c.locale_id,
+            l.slug AS locale_slug,
             c.cycle_number,
             c.starts_at,
             c.submission_ends_at,
@@ -2663,12 +2786,13 @@ async fn load_active_world_cycle(db: &sqlx::PgPool) -> Result<ActiveCycle, AppEr
             (c.voting_ends_at <= NOW()) AS can_resolve
         FROM cycles c
         JOIN locales l ON l.id = c.locale_id
-        WHERE l.slug = 'world'
+        WHERE l.slug = $1
           AND c.is_active = TRUE
         ORDER BY c.created_at DESC
         LIMIT 1
         "#,
     )
+    .bind(locale_slug)
     .fetch_optional(db)
     .await
     .map_err(|err| {
@@ -2689,6 +2813,7 @@ async fn load_active_world_cycle(db: &sqlx::PgPool) -> Result<ActiveCycle, AppEr
             voting_ends_at: row.try_get("voting_ends_at").map_err(internal_db_err)?,
         },
         locale_id: row.try_get("locale_id").map_err(internal_db_err)?,
+        locale_slug: row.try_get("locale_slug").map_err(internal_db_err)?,
         can_resolve: row.try_get("can_resolve").map_err(internal_db_err)?,
     })
 }
@@ -2699,7 +2824,9 @@ async fn resolve_cycle_board(
     board_code: &str,
     moderator_user_id: Uuid,
 ) -> Result<CycleResultSummary, AppError> {
-    let rows = fetch_proposals_for_cycle(db, cycle.summary.id, Some(board_code)).await?;
+    let rows =
+        fetch_proposals_for_cycle(db, &cycle.locale_slug, cycle.summary.id, Some(board_code))
+            .await?;
     let solution_target_issue_id = if board_code == "solution" {
         load_solution_board_target_issue_id(db, cycle).await?
     } else {
@@ -2719,7 +2846,9 @@ async fn resolve_cycle_board(
         .iter()
         .filter(|candidate| candidate.rank.is_some())
         .count();
-    let result_status = if winner_proposal_id.is_some() {
+    let result_status = if board_code == "solution" && solution_target_issue_id.is_none() {
+        "no_solution_target"
+    } else if winner_proposal_id.is_some() {
         "resolved"
     } else {
         "no_ranked_winner"
@@ -2730,6 +2859,7 @@ async fn resolve_cycle_board(
             Some(solution_proposal_id) => {
                 let execution_record = create_execution_record_from_solution(
                     db,
+                    &cycle.locale_slug,
                     moderator_user_id,
                     solution_proposal_id,
                     true,
@@ -2800,7 +2930,7 @@ async fn resolve_cycle_board(
     .try_get("id")
     .map_err(internal_db_err)?;
 
-    let result = load_cycle_result_by_id(db, result_id).await?;
+    let result = load_cycle_result_by_id(db, &cycle.locale_slug, result_id).await?;
 
     if !already_resolved {
         if let Some(winner_proposal_id) = winner_proposal_id {
@@ -2858,9 +2988,11 @@ async fn cycle_result_exists(
 
 async fn load_cycle_result_by_id(
     db: &sqlx::PgPool,
+    locale_slug: &str,
     result_id: Uuid,
 ) -> Result<CycleResultSummary, AppError> {
-    let mut results = load_cycle_results_by_filter(db, Some(result_id), None, false).await?;
+    let mut results =
+        load_cycle_results_by_filter(db, locale_slug, Some(result_id), None, false).await?;
     results
         .pop()
         .ok_or_else(|| AppError::Internal("Resolved cycle result could not be loaded.".to_string()))
@@ -2868,14 +3000,16 @@ async fn load_cycle_result_by_id(
 
 async fn load_cycle_results(
     db: &sqlx::PgPool,
+    locale_slug: &str,
     cycle_id: Option<Uuid>,
     only_published: bool,
 ) -> Result<Vec<CycleResultSummary>, AppError> {
-    load_cycle_results_by_filter(db, None, cycle_id, only_published).await
+    load_cycle_results_by_filter(db, locale_slug, None, cycle_id, only_published).await
 }
 
 async fn load_cycle_results_by_filter(
     db: &sqlx::PgPool,
+    locale_slug: &str,
     result_id: Option<Uuid>,
     cycle_id: Option<Uuid>,
     only_published: bool,
@@ -2890,7 +3024,6 @@ async fn load_cycle_results_by_filter(
             cr.result_status,
             cr.winning_proposal_id,
             cr.execution_record_id,
-            cr.resolved_by_moderator_user_id,
             cr.result_snapshot,
             cr.published_at,
             cr.created_at,
@@ -2922,13 +3055,14 @@ async fn load_cycle_results_by_filter(
         JOIN locales l ON l.id = cr.locale_id
         LEFT JOIN proposals wp ON wp.id = cr.winning_proposal_id
         LEFT JOIN boards wb ON wb.id = wp.board_id
-        WHERE l.slug = 'world'
-          AND ($1::uuid IS NULL OR cr.id = $1)
-          AND ($2::uuid IS NULL OR cr.cycle_id = $2)
-          AND ($3::boolean = FALSE OR cr.published_at IS NOT NULL)
+        WHERE l.slug = $1
+          AND ($2::uuid IS NULL OR cr.id = $2)
+          AND ($3::uuid IS NULL OR cr.cycle_id = $3)
+          AND ($4::boolean = FALSE OR cr.published_at IS NOT NULL)
         ORDER BY c.cycle_number DESC, cr.board_code ASC
         "#,
     )
+    .bind(locale_slug)
     .bind(result_id)
     .bind(cycle_id)
     .bind(only_published)
@@ -2946,6 +3080,7 @@ async fn load_cycle_results_by_filter(
 
 async fn fetch_archived_proposals(
     db: &sqlx::PgPool,
+    locale_slug: &str,
 ) -> Result<Vec<sqlx::postgres::PgRow>, AppError> {
     sqlx::query(
         r#"
@@ -2976,11 +3111,12 @@ async fn fetch_archived_proposals(
         JOIN boards b ON b.id = p.board_id
         JOIN cycles c ON c.id = p.cycle_id
         JOIN locales l ON l.id = p.locale_id
-        WHERE l.slug = 'world'
+        WHERE l.slug = $1
           AND p.primary_state = 'archived'
         ORDER BY p.created_at DESC
         "#,
     )
+    .bind(locale_slug)
     .fetch_all(db)
     .await
     .map_err(|err| {
@@ -2991,6 +3127,7 @@ async fn fetch_archived_proposals(
 
 async fn fetch_reviewable_proposals_for_user(
     db: &sqlx::PgPool,
+    locale_slug: &str,
     user_id: Uuid,
     board_code_filter: Option<&str>,
 ) -> Result<Vec<sqlx::postgres::PgRow>, AppError> {
@@ -3054,7 +3191,7 @@ async fn fetch_reviewable_proposals_for_user(
         LEFT JOIN proposal_merge_votes mv
             ON mv.proposal_id = p.id
            AND mv.user_id = $1
-        WHERE l.slug = 'world'
+        WHERE l.slug = $3
           AND c.is_active = TRUE
           AND p.primary_state = 'active'
           AND p.author_user_id <> $1
@@ -3081,7 +3218,7 @@ async fn fetch_reviewable_proposals_for_user(
                     OR (
                         (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count) > 0
                         AND p.unsafe_count::numeric
-                            / (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count)::numeric >= 0.35
+                            / (p.support_count + p.not_a_fit_count + p.unclear_count + p.unsafe_count + p.merge_count)::numeric >= 0.50
                     )
                   )
               )
@@ -3090,6 +3227,7 @@ async fn fetch_reviewable_proposals_for_user(
     )
     .bind(user_id)
     .bind(board_code_filter)
+    .bind(locale_slug)
     .fetch_all(db)
     .await
     .map_err(|err| {
@@ -3274,7 +3412,6 @@ fn map_relationship_note(
     let updated_at: DateTime<Utc> = row.try_get("note_updated_at").map_err(internal_db_err)?;
 
     Ok(Some(ProposalMergeRelationshipNote {
-        author_user_id: row.try_get("author_user_id").map_err(internal_db_err)?,
         difference_type: row.try_get("difference_type").map_err(internal_db_err)?,
         note_text,
         created_at: created_at.to_rfc3339(),
@@ -3300,9 +3437,6 @@ fn map_cycle_result_row(row: sqlx::postgres::PgRow) -> Result<CycleResultSummary
             .map_err(internal_db_err)?,
         execution_record_id: row
             .try_get("execution_record_id")
-            .map_err(internal_db_err)?,
-        resolved_by_moderator_user_id: row
-            .try_get("resolved_by_moderator_user_id")
             .map_err(internal_db_err)?,
         result_snapshot: row.try_get("result_snapshot").map_err(internal_db_err)?,
         published_at: row.try_get("published_at").map_err(internal_db_err)?,
@@ -3684,7 +3818,7 @@ fn candidate_is_excluded(candidate: &ReviewCandidate) -> bool {
         || fraction_at_least(
             candidate.proposal.unsafe_count,
             candidate.total_interactions,
-            0.35,
+            0.50,
         )
 }
 
@@ -3708,7 +3842,6 @@ fn select_review_pool(candidates: Vec<ReviewCandidate>, limit: usize) -> Vec<Rev
             selected_ids.push(item.proposal.id);
             selected.push(ReviewPoolProposal {
                 proposal: item.proposal,
-                review_bucket: review_bucket_label(bucket).to_string(),
             });
         }
     }
@@ -3722,7 +3855,6 @@ fn select_review_pool(candidates: Vec<ReviewCandidate>, limit: usize) -> Vec<Rev
         selected_ids.push(item.proposal.id);
         selected.push(ReviewPoolProposal {
             proposal: item.proposal,
-            review_bucket: review_bucket_label(ReviewBucket::Fallback).to_string(),
         });
     }
 
@@ -3827,16 +3959,6 @@ fn sort_bucket(items: &mut [ReviewCandidate], bucket: ReviewBucket) {
     }
 }
 
-fn review_bucket_label(bucket: ReviewBucket) -> &'static str {
-    match bucket {
-        ReviewBucket::LowRatedSalvageable => "bucket_a_low_rated_salvageable",
-        ReviewBucket::ContestedUnderReviewed => "bucket_b_contested_under_reviewed",
-        ReviewBucket::MergeHeavy => "bucket_c_merge_heavy",
-        ReviewBucket::LowExposure => "bucket_d_low_exposure",
-        ReviewBucket::Fallback => "least_exposed_fallback",
-    }
-}
-
 async fn load_moderator_actions(
     db: &sqlx::PgPool,
     proposal_id: Uuid,
@@ -3849,7 +3971,6 @@ async fn load_moderator_actions(
             ma.proposal_id,
             ma.related_proposal_id,
             rp.title AS related_proposal_title,
-            ma.moderator_user_id,
             ma.action_reason,
             ma.public_note,
             ma.created_at
@@ -3880,7 +4001,6 @@ async fn load_moderator_actions(
                 related_proposal_title: row
                     .try_get("related_proposal_title")
                     .map_err(internal_db_err)?,
-                moderator_user_id: row.try_get("moderator_user_id").map_err(internal_db_err)?,
                 action_reason: row.try_get("action_reason").map_err(internal_db_err)?,
                 public_note: row.try_get("public_note").map_err(internal_db_err)?,
                 created_at: row.try_get("created_at").map_err(internal_db_err)?,
@@ -4185,30 +4305,35 @@ async fn refresh_proposal_vote_counts_tx(
                     SELECT COUNT(*)::int
                     FROM proposal_sentiment_votes
                     WHERE proposal_id = $1
+                      AND user_id <> (SELECT author_user_id FROM proposals WHERE id = $1)
                       AND vote_value = 'support'
                 ) AS support_count,
                 (
                     SELECT COUNT(*)::int
                     FROM proposal_sentiment_votes
                     WHERE proposal_id = $1
+                      AND user_id <> (SELECT author_user_id FROM proposals WHERE id = $1)
                       AND vote_value = 'not_a_fit'
                 ) AS not_a_fit_count,
                 (
                     SELECT COUNT(*)::int
                     FROM proposal_sentiment_votes
                     WHERE proposal_id = $1
+                      AND user_id <> (SELECT author_user_id FROM proposals WHERE id = $1)
                       AND vote_value = 'unclear'
                 ) AS unclear_count,
                 (
                     SELECT COUNT(*)::int
                     FROM proposal_sentiment_votes
                     WHERE proposal_id = $1
+                      AND user_id <> (SELECT author_user_id FROM proposals WHERE id = $1)
                       AND vote_value = 'unsafe'
                 ) AS unsafe_count,
                 (
                     SELECT COUNT(*)::int
                     FROM proposal_merge_votes mv
                     WHERE mv.proposal_id = $1
+                      AND mv.user_id <> (SELECT author_user_id FROM proposals WHERE id = $1)
                       AND mv.target_proposal_id IS NOT NULL
                       AND EXISTS (
                         SELECT 1
@@ -4237,7 +4362,7 @@ async fn refresh_proposal_vote_counts_tx(
                   OR (
                     (counts.support_count + counts.not_a_fit_count + counts.unclear_count + counts.unsafe_count + counts.merge_count) > 0
                     AND counts.unsafe_count::numeric
-                        / (counts.support_count + counts.not_a_fit_count + counts.unclear_count + counts.unsafe_count + counts.merge_count)::numeric >= 0.35
+                        / (counts.support_count + counts.not_a_fit_count + counts.unclear_count + counts.unsafe_count + counts.merge_count)::numeric >= 0.50
                   )
                 THEN COALESCE(p.high_moderation_watch_started_at, NOW())
                 ELSE NULL
@@ -4295,49 +4420,44 @@ fn fraction_at_least(part: i32, total: i32, threshold: f64) -> bool {
     total > 0 && (part as f64 / total as f64) >= threshold
 }
 
-fn validate_title_quality(value: &str) -> Result<(), AppError> {
-    validate_quality_text(value, "Title", 6, 1, MAX_TITLE_CHARS)
+fn is_valid_archive_reason(value: &str) -> bool {
+    matches!(
+        value,
+        "duplicate"
+            | "unsafe_illegal_deceptive"
+            | "spam_abuse"
+            | "irrelevant"
+            | "minimum_quality"
+            | "superseded"
+            | "moderation"
+            | "manual_archive"
+            | "not_a_fit"
+    )
 }
 
-fn require_quality_text(
+fn validate_title_quality(value: &str) -> Result<(), AppError> {
+    validate_required_text(value, "Title", MAX_TITLE_CHARS)
+}
+
+fn require_submission_text(
     value: &Option<String>,
     field_name: &str,
-    min_chars: usize,
-    min_words: usize,
     max_chars: usize,
 ) -> Result<(), AppError> {
     let Some(value) = value.as_ref().map(|v| v.trim()).filter(|v| !v.is_empty()) else {
         return Err(AppError::BadRequest(format!("{field_name} is required.")));
     };
 
-    validate_quality_text(value, field_name, min_chars, min_words, max_chars)
+    validate_required_text(value, field_name, max_chars)
 }
 
-fn validate_quality_text(
-    value: &str,
-    field_name: &str,
-    min_chars: usize,
-    min_words: usize,
-    max_chars: usize,
-) -> Result<(), AppError> {
+fn validate_required_text(value: &str, field_name: &str, max_chars: usize) -> Result<(), AppError> {
     let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::BadRequest(format!("{field_name} is required.")));
+    }
+
     validate_text_max_chars(trimmed, field_name, max_chars)?;
-
-    if trimmed.chars().count() < min_chars {
-        return Err(AppError::BadRequest(format!(
-            "{field_name} needs a little more detail."
-        )));
-    }
-
-    let word_count = trimmed
-        .split_whitespace()
-        .filter(|part| part.chars().any(|character| character.is_alphanumeric()))
-        .count();
-    if word_count < min_words {
-        return Err(AppError::BadRequest(format!(
-            "{field_name} needs a little more detail."
-        )));
-    }
 
     let lowered = trimmed.to_ascii_lowercase();
     let compact = lowered
@@ -4426,11 +4546,9 @@ fn validate_completion_criteria(value: Option<&Value>) -> Result<(), AppError> {
             index,
             "criterion_description",
         )?;
-        validate_quality_text(
+        validate_required_text(
             criterion_description,
             &format!("completion_criteria[{index}].criterion_description"),
-            8,
-            2,
             MAX_COMPLETION_CRITERION_CHARS,
         )?;
         let status =
@@ -4494,11 +4612,9 @@ fn validate_execution_tracking_entries(value: Option<&Value>) -> Result<(), AppE
         )?;
         let target_needed =
             require_object_text(object, "execution_tracking_entries", index, "target_needed")?;
-        validate_quality_text(
+        validate_required_text(
             target_needed,
             &format!("execution_tracking_entries[{index}].target_needed"),
-            5,
-            1,
             MAX_RESOURCE_TARGET_CHARS,
         )?;
         validate_optional_object_text_max(

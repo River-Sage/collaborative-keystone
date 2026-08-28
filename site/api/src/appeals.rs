@@ -41,12 +41,10 @@ pub struct AppealQueueItem {
     pub appeal_id: Uuid,
     pub proposal_id: Uuid,
     pub proposal_title: String,
-    pub author_user_id: Uuid,
     pub appeal_reason: String,
     pub clarification_note: Option<String>,
     pub status: String,
     pub archived_reason: Option<String>,
-    pub last_archive_moderator_user_id: Option<Uuid>,
     pub current_moderator_must_recuse: bool,
     pub created_at: DateTime<Utc>,
 }
@@ -112,12 +110,13 @@ pub async fn submit_appeal_handler(
         JOIN cycles c ON c.id = p.cycle_id
         JOIN locales l ON l.id = p.locale_id
         WHERE p.id = $1
-          AND l.slug = 'world'
+          AND l.slug = $2
           AND c.is_active = TRUE
         LIMIT 1
         "#,
     )
     .bind(proposal_id)
+    .bind(&state.locale.slug)
     .fetch_optional(&state.db)
     .await
     .map_err(|err| {
@@ -213,7 +212,6 @@ pub async fn submit_appeal_handler(
         clarification_note.as_deref(),
         json!({
             "appeal_id": appeal_id,
-            "author_user_id": auth_user.user_id,
             "archived_reason": archived_reason,
         }),
     )
@@ -244,7 +242,6 @@ pub async fn appeal_review_queue_handler(
             a.id AS appeal_id,
             a.proposal_id,
             p.title AS proposal_title,
-            a.author_user_id,
             a.appeal_reason,
             a.clarification_note,
             a.status,
@@ -264,10 +261,11 @@ pub async fn appeal_review_queue_handler(
         JOIN locales l ON l.id = p.locale_id
         WHERE a.status = 'pending'
           AND c.is_active = TRUE
-          AND l.slug = 'world'
+          AND l.slug = $1
         ORDER BY a.created_at ASC
         "#,
     )
+    .bind(&state.locale.slug)
     .fetch_all(&state.db)
     .await
     .map_err(|err| {
@@ -330,11 +328,14 @@ pub async fn resolve_appeal_handler(
             ) AS last_archive_moderator_user_id
         FROM appeals a
         JOIN proposals p ON p.id = a.proposal_id
+        JOIN locales l ON l.id = p.locale_id
         WHERE a.id = $1
+          AND l.slug = $2
         LIMIT 1
         "#,
     )
     .bind(appeal_id)
+    .bind(&state.locale.slug)
     .fetch_optional(&state.db)
     .await
     .map_err(|err| {
@@ -453,7 +454,6 @@ pub async fn resolve_appeal_handler(
             "proposal_restored": proposal_restored,
             "previous_state": previous_state.clone(),
             "archived_reason": archived_reason.clone(),
-            "last_archive_moderator_user_id": last_archive_moderator_user_id,
             "alternate_moderator_available": alternate_moderator_available,
         }),
     )
@@ -473,7 +473,6 @@ pub async fn resolve_appeal_handler(
                 "appeal_id": appeal_id,
                 "previous_state": previous_state,
                 "archived_reason": archived_reason,
-                "last_archive_moderator_user_id": last_archive_moderator_user_id,
             }),
         )
         .await?;
@@ -508,12 +507,10 @@ fn map_appeal_queue_row(
         appeal_id: row.try_get("appeal_id").map_err(internal_db_err)?,
         proposal_id: row.try_get("proposal_id").map_err(internal_db_err)?,
         proposal_title: row.try_get("proposal_title").map_err(internal_db_err)?,
-        author_user_id: row.try_get("author_user_id").map_err(internal_db_err)?,
         appeal_reason: row.try_get("appeal_reason").map_err(internal_db_err)?,
         clarification_note: row.try_get("clarification_note").map_err(internal_db_err)?,
         status: row.try_get("status").map_err(internal_db_err)?,
         archived_reason: row.try_get("archived_reason").map_err(internal_db_err)?,
-        last_archive_moderator_user_id,
         current_moderator_must_recuse,
         created_at: row.try_get("created_at").map_err(internal_db_err)?,
     })

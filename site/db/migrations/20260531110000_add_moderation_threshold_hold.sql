@@ -11,5 +11,5 @@ WHERE unsafe_count >= 8
    OR (
         (support_count + not_a_fit_count + unclear_count + unsafe_count + merge_count) > 0
         AND unsafe_count::numeric
-            / (support_count + not_a_fit_count + unclear_count + unsafe_count + merge_count)::numeric >= 0.35
+            / (support_count + not_a_fit_count + unclear_count + unsafe_count + merge_count)::numeric >= 0.50
    );

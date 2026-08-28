@@ -1,0 +1,123 @@
+name: Release Provenance
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  build-and-sign-manifest:
+    name: Build and sign provenance manifest
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: site/web/package-lock.json
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build web
+        working-directory: site/web
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build API
+        working-directory: site/api
+        run: cargo build --release --locked
+
+      - name: Compute release digests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+
+          web_digest="$(tar -C site/web/dist -cf - . | sha256sum | cut -d' ' -f1)"
+          api_digest="$(sha256sum site/api/target/release/api | cut -d' ' -f1)"
+          migration_digest="$(find site/db/migrations -type f -print | sort | xargs sha256sum | sha256sum | cut -d' ' -f1)"
+          config_digest="$(find site/api site/web -maxdepth 2 -type f \( -name '.env.example' -o -name 'Cargo.toml' -o -name 'Cargo.lock' -o -name 'package.json' -o -name 'package-lock.json' -o -name 'vite.config.*' \) -print | sort | xargs sha256sum | sha256sum | cut -d' ' -f1)"
+
+          {
+            echo "CK_WEB_ARTIFACT_DIGEST=sha256:${web_digest}"
+            echo "CK_API_ARTIFACT_DIGEST=sha256:${api_digest}"
+            echo "CK_MIGRATION_SET_DIGEST=sha256:${migration_digest}"
+            echo "CK_CONFIGURATION_DIGEST=sha256:${config_digest}"
+            echo "CK_BUILD_TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_ENV"
+
+      - name: Generate build provenance manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require("fs");
+
+          const manifest = {
+            schema_version: "keystone-build-provenance/v1",
+            product: "Keystone Core",
+            deployment_kind: "release",
+            deployment_status: "official",
+            registry_status: "official",
+            trust_tier: "signed-release",
+            source_repository_url: `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}`,
+            source_repository_configured: true,
+            git_commit_sha: process.env.GITHUB_SHA,
+            release_id: process.env.GITHUB_REF_NAME,
+            build_timestamp: process.env.CK_BUILD_TIMESTAMP,
+            build_environment: "github-actions",
+            web_artifact_digest: process.env.CK_WEB_ARTIFACT_DIGEST,
+            api_artifact_digest: process.env.CK_API_ARTIFACT_DIGEST,
+            migration_set_digest: process.env.CK_MIGRATION_SET_DIGEST,
+            configuration_digest: process.env.CK_CONFIGURATION_DIGEST,
+            signature: "sigstore-bundle:keystone-build.sigstore.json",
+            public_verification_key: "sigstore-keyless:github-actions-oidc",
+            signature_status: "signed",
+            locale: {
+              slug: "world",
+              name: "World",
+              locale_type: "world"
+            },
+            operator: {
+              name: "Global Keystone",
+              contact: null
+            },
+            bootstrap: {
+              first_moderator_bootstrap_complete: false
+            },
+            source_license_path: "/source-info"
+          };
+
+          fs.writeFileSync("dist/keystone-build.json", `${JSON.stringify(manifest, null, 2)}\n`);
+          NODE
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign build provenance manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          cosign sign-blob --yes \
+            --bundle dist/keystone-build.sigstore.json \
+            dist/keystone-build.json
+
+      - name: Upload provenance artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: keystone-release-provenance
+          path: |
+            dist/keystone-build.json
+            dist/keystone-build.sigstore.json
