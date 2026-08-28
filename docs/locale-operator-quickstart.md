@@ -202,7 +202,7 @@ Before a locale is listed as `authorized`, `official`, or `verified`, it should 
 - `APP_ENV=production`
 - development helper env vars disabled
 - first moderator bootstrap completed and token removed
-- visible Source, AGPL, Build Info, and Registry links
+- a visible Source & Trust entry point with Source Code, AGPL License, Build Details, and Locale Data links
 - public `/source-info`, `/.well-known/keystone-build.json`, and `/.well-known/keystone-locales.json`
 - operator identity/contact configured
 - an operator agreement accepted before official branding

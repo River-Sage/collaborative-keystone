@@ -110,6 +110,24 @@ const DEFAULT_LOCALE_NAME = "World";
 const DEFAULT_SOURCE_REPOSITORY_URL =
   "https://github.com/River-Sage/collaborative-keystone";
 const AGPL_LICENSE_URL = "https://www.gnu.org/licenses/agpl-3.0.en.html";
+const TRUST_STATUS_LABELS = {
+  canonical: "Official global",
+  official: "Official",
+  authorized: "Authorized",
+  verified: "Verified",
+  stale: "Needs refresh",
+  warning: "Needs review",
+  suspended: "Paused",
+  compromised: "Security warning",
+  abandoned: "Inactive",
+  community: "Community",
+  unverified: "Unverified",
+  development: "Development",
+  unsigned: "Public preview",
+  signed: "Signed",
+  "signed-release": "Signed release",
+  "signed-release-reproducible": "Reproducible release",
+};
 const TURNSTILE_SITE_KEY = (import.meta.env.VITE_TURNSTILE_SITE_KEY || "").trim();
 const WORLD_PATREON_URL = "https://patreon.com/worldkeystone";
 const CONFIGURED_PATREON_URL = (import.meta.env.VITE_PATREON_URL || "").trim();
@@ -230,6 +248,22 @@ function formatRoleLabel(roleCode) {
   if (roleCode === "moderator") return "Moderator";
   if (roleCode === "registered_user") return "User";
   return roleCode || "User";
+}
+
+function formatTrustStatusLabel(value) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/_/g, "-");
+
+  if (!normalized) return "Public preview";
+  if (TRUST_STATUS_LABELS[normalized]) return TRUST_STATUS_LABELS[normalized];
+
+  return normalized
+    .split("-")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 function getProposalTotalCount(proposal) {
@@ -3927,10 +3961,24 @@ function App() {
     localeRegistry?.entries?.[0]?.registry_status ||
     sourceInfo?.registry_status ||
     deploymentStatusLabel;
-  const trustTierLabel =
-    buildProvenance?.trust_tier || localeRegistry?.entries?.[0]?.trust_tier || "development";
-  const signatureStatusLabel =
-    buildProvenance?.signature_status === "signed" ? "Signed" : "Unsigned";
+  const deploymentStatusDisplay = formatTrustStatusLabel(deploymentStatusLabel);
+  const registryStatusDisplay = formatTrustStatusLabel(registryStatusLabel);
+  const releaseVerificationDisplay =
+    buildProvenance?.signature_status === "signed" ? "Signed release" : "Public preview";
+  const isCanonicalDeployment =
+    String(deploymentStatusLabel).toLowerCase() === "canonical" ||
+    String(registryStatusLabel).toLowerCase() === "canonical";
+  const sourceTrustBadge = isCanonicalDeployment
+    ? "Official"
+    : ["authorized", "verified"].includes(String(registryStatusLabel).toLowerCase())
+      ? "Verified"
+      : "Public";
+  const sourceTrustHeadline = isCanonicalDeployment
+    ? `${brandName} is the official global site.`
+    : `${brandName} is a Keystone site.`;
+  const sourceTrustBody = isCanonicalDeployment
+    ? "The source, license, build record, and locale directory stay public so people can check what they are using."
+    : "Keystone sites publish source, license, build, and locale records so people can check what they are using.";
   const localeDirectoryEntries = (localeRegistry?.entries || []).filter(
     (entry) => entry?.locale?.name && entry?.web_origin
   );
@@ -3953,7 +4001,7 @@ function App() {
               rel="noreferrer"
             >
               <strong>{entry.locale.name} Keystone</strong>
-              <span>{entry.registry_status || "unverified"}</span>
+              <span>{formatTrustStatusLabel(entry.registry_status || "unverified")}</span>
             </a>
           ))}
         </div>
@@ -3961,22 +4009,38 @@ function App() {
     );
   }
 
-  function renderSourceInfoLinks() {
+  function renderSourceTrustLinks() {
     return (
-      <div className="source-license-strip">
+      <div className="source-trust-links">
         <a href={sourceRepositoryUrl} target="_blank" rel="noreferrer">
-          Source
+          Source Code
         </a>
         <a href={licenseUrl} target="_blank" rel="noreferrer">
-          AGPL
+          AGPL License
         </a>
         <a href={buildProvenanceUrl} target="_blank" rel="noreferrer">
-          Build Info
+          Build Details
         </a>
         <a href={localeRegistryUrl} target="_blank" rel="noreferrer">
-          Registry
+          Locale Data
         </a>
       </div>
+    );
+  }
+
+  function renderSourceTrustDisclosure() {
+    return (
+      <details className="source-trust-disclosure">
+        <summary>Source & Trust</summary>
+        <div className="source-trust-summary">
+          <strong>{sourceTrustHeadline}</strong>
+          <span>{sourceTrustBody}</span>
+        </div>
+        {renderSourceTrustLinks()}
+        {sourceInfoError ? (
+          <p className="muted small-muted">{sourceInfoError}</p>
+        ) : null}
+      </details>
     );
   }
 
@@ -4034,7 +4098,7 @@ function App() {
         <div className="auth-card">
           <h1>{brandName}</h1>
           <p className="muted">Checking session...</p>
-          {renderSourceInfoLinks()}
+          {renderSourceTrustDisclosure()}
         </div>
       </div>
     );
@@ -4234,7 +4298,7 @@ function App() {
             </div>
           ) : null}
 
-          {renderSourceInfoLinks()}
+          {renderSourceTrustDisclosure()}
           {renderLocaleDirectory()}
         </div>
       </div>
@@ -4534,10 +4598,14 @@ function App() {
 
               <div className="source-info-panel">
                 <div className="tool-section-header">
-                  <h3>Source & Build</h3>
+                  <h3>Source & Trust</h3>
                   <span className="state-pill subtle-pill">
-                    {signatureStatusLabel}
+                    {sourceTrustBadge}
                   </span>
+                </div>
+                <div className="source-trust-summary">
+                  <strong>{sourceTrustHeadline}</strong>
+                  <span>{sourceTrustBody}</span>
                 </div>
                 <div className="source-info-grid">
                   <div>
@@ -4545,23 +4613,23 @@ function App() {
                     <span>{buildLabel}</span>
                   </div>
                   <div>
-                    <strong>Status</strong>
-                    <span>{deploymentStatusLabel}</span>
+                    <strong>Site</strong>
+                    <span>{deploymentStatusDisplay}</span>
                   </div>
                   <div>
-                    <strong>Registry</strong>
-                    <span>{registryStatusLabel}</span>
+                    <strong>Directory</strong>
+                    <span>{registryStatusDisplay}</span>
                   </div>
                   <div>
-                    <strong>Trust</strong>
-                    <span>{trustTierLabel}</span>
+                    <strong>Verification</strong>
+                    <span>{releaseVerificationDisplay}</span>
                   </div>
                   <div>
                     <strong>Locale</strong>
                     <span>{buildProvenance?.locale?.name || activeLocaleName}</span>
                   </div>
                 </div>
-                {renderSourceInfoLinks()}
+                {renderSourceTrustLinks()}
                 {renderLocaleDirectory()}
                 {sourceInfoError ? (
                   <p className="muted small-muted">{sourceInfoError}</p>

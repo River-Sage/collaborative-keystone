@@ -223,6 +223,8 @@ Every running instance must publicly expose source/license information and build
 * `/.well-known/keystone-build.json`
 * `/.well-known/keystone-locales.json`
 
+The normal web UI should present this as a plain-language **Source & Trust** surface instead of exposing raw registry/status terminology as primary navigation. The Source & Trust surface should explain whether the user is on the official global site or another Keystone deployment, then offer technical links for source code, license, build details, and locale data.
+
 Secrets must not be committed to the repository or embedded in public artifacts. Instance-specific private material belongs in environment variables, a secret manager, or an operator-controlled secret file that is excluded from source control.
 
 Examples of private instance secrets:
@@ -301,7 +303,7 @@ The repository software is licensed separately from the Collaborative Keystone n
 Engineering and deployment tooling must preserve that separation:
 
 * AGPL source availability must not be blocked by encryption, packaging, or appliance-style deployment.
-* Every running web UI should provide visible Source, AGPL, Build Info, and Registry links from public/login surfaces and the Settings view.
+* Every running web UI should provide a visible Source & Trust entry point from public/login surfaces and the Settings view. That surface should offer Source Code, AGPL License, Build Details, and Locale Data links without making raw registry status legends the default end-user experience.
 * World Keystone may show a creator support link in Settings. Other locale deployments must not show the World Keystone Patreon link.
 * Signed official releases may be distributed for convenience, but users must still be able to obtain the corresponding source required by the software license.
 * Modified deployments must not claim official status unless they are authorized and verifiably running an approved release/configuration.

@@ -30,7 +30,7 @@ Use Archive to inspect historical proposals. Archived proposals are not deleted.
 
 ### Settings
 
-Use Settings to see your current role, log out, reopen the in-app intro, and review Source, AGPL, Build Info, and Registry links. On World Keystone only, Settings also includes the creator support link.
+Use Settings to see your current role, log out, reopen the in-app intro, and review Source & Trust information. On World Keystone only, Settings also includes the creator support link.
 
 ## Moderator Tabs
 
@@ -77,4 +77,4 @@ Each submission has its own Discussion panel. You may post one comment per submi
 - Submitted proposals are not edited in v1.
 - Moderators do not hard-delete ordinary proposals.
 - Implementation completion and cancellation require a future claim/review flow; moderator-stewards can update progress but cannot finalize an implementation alone.
-- Source, AGPL, Build Info, and Registry are visible from the login screen and Settings tab so users can inspect the running instance.
+- Source & Trust is available from the login screen and Settings tab so users can inspect source code, license, build details, and locale data for the running instance.

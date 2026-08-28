@@ -263,8 +263,8 @@ See `docs/release-signing-and-provenance.md` for the signing/provenance target a
 - **Signing system:** Target Sigstore Cosign for release/container signing and SLSA-style provenance from CI. Registry entries and deployment attestations should also be signed.
 - **Key custody:** Official signing keys stay under project-controlled CI/KMS or hardware-backed custody. Locale operators do not receive official signing keys; they generate instance keys and register public keys with the global registry.
 - **Reproducible builds:** Reproducible builds are desirable but not a launch blocker. Signed releases, lockfiles, pinned dependencies, and CI provenance come first. Reproducible builds can become a higher trust tier.
-- **Registry status:** The global registry should visibly mark deployments as canonical, official, authorized, verified, stale, warning, suspended, compromised, abandoned, community, unverified, or development.
-- **Source/license UI:** Every running web UI must offer visible Source, AGPL, Build Info, and Registry links. The current app shows them on the public login surface and Account view, backed by `/source-info`, `/.well-known/keystone-build.json`, and `/.well-known/keystone-locales.json`.
+- **Registry status:** The global registry should mark deployments as canonical, official, authorized, verified, stale, warning, suspended, compromised, abandoned, community, unverified, or development. The raw status vocabulary remains public for auditors and tooling, but normal user surfaces should translate it into plain-language trust labels.
+- **Source/license UI:** Every running web UI must offer a visible Source & Trust entry point. The current app shows it on the public login surface and Account view, with Source Code, AGPL License, Build Details, and Locale Data links backed by `/source-info`, `/.well-known/keystone-build.json`, and `/.well-known/keystone-locales.json`.
 - **Visual identity:** The master name, logo, official seal/checkmark, global domain, and official wording are reserved. Verified locales may use approved `{Locale} Keystone` branding. Community forks may truthfully say they are forks or are powered by Keystone Core, but must not look official.
 
 Concrete working references:
@@ -372,7 +372,7 @@ The smoke account should be a normal user, not a moderator. The script does not 
 - Confirm development account seeding is disabled.
 - Confirm `/source-info`, `/.well-known/keystone-build.json`, and `/.well-known/keystone-locales.json` return public metadata.
 - Confirm build and registry metadata report the expected locale slug, display name, and registry status.
-- Confirm the web UI shows Source, AGPL, Build Info, and Registry links on login and Account surfaces.
+- Confirm the web UI shows the Source & Trust entry point on login and Account surfaces, and that it exposes Source Code, AGPL License, Build Details, and Locale Data links.
 - Configure local SMTP relay delivery before public signups depend on email verification.
 
 ## Known Prototype Limits

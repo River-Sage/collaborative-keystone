@@ -37,7 +37,7 @@ Every running API should expose:
 /.well-known/keystone-locales.json
 ```
 
-The web UI should expose visible Source, AGPL, Build Info, and Registry links on public/login surfaces and in the Account view.
+The web UI should expose a visible Source & Trust entry point on public/login surfaces and in the Account view. That surface should provide Source Code, AGPL License, Build Details, and Locale Data links while keeping raw registry/status vocabulary behind technical links.
 
 ## Build Manifest Fields
 

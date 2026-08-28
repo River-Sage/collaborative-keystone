@@ -51,7 +51,7 @@ Every authorized locale instance must visibly offer:
 
 - Source link
 - AGPL/license link
-- Build Info link
+- Build Details link
 - Registry/provenance link
 
 The running API must expose:
