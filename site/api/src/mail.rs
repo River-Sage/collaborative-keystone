@@ -1,19 +1,19 @@
 use std::{env, fmt, time::Duration};
 
-use chrono::Utc;
-use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-    net::TcpStream,
-    time::timeout,
+use lettre::{
+    Address, AsyncSmtpTransport, AsyncTransport, Message as LettreMessage, Tokio1Executor,
+    message::{Mailbox, header::ContentType},
+    transport::smtp::{authentication::Credentials, extension::ClientId},
 };
 use tracing::info;
-use uuid::Uuid;
 
 const DEFAULT_WEB_ORIGIN: &str = "http://localhost:5173";
 const DEFAULT_FROM_NAME: &str = "World Keystone";
 const DEFAULT_FROM_EMAIL: &str = "no-reply@worldkeystone.com";
 const DEFAULT_SMTP_HOST: &str = "127.0.0.1";
 const DEFAULT_SMTP_PORT: u16 = 25;
+const DEFAULT_SMTP_STARTTLS_PORT: u16 = 587;
+const DEFAULT_SMTP_IMPLICIT_TLS_PORT: u16 = 465;
 const DEFAULT_SMTP_TIMEOUT_SECONDS: u64 = 10;
 
 #[derive(Debug, Clone)]
@@ -34,12 +34,7 @@ pub struct SmtpMailer {
     from_name: String,
     from_email: String,
     web_origin: String,
-    host: String,
-    port: u16,
-    helo_name: String,
-    username: Option<String>,
-    password: Option<String>,
-    timeout: Duration,
+    transport: AsyncSmtpTransport<Tokio1Executor>,
 }
 
 #[derive(Debug, Clone)]
@@ -70,10 +65,32 @@ impl fmt::Display for MailError {
 
 impl std::error::Error for MailError {}
 
-#[derive(Debug)]
-struct SmtpResponse {
-    code: u16,
-    lines: Vec<String>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SmtpSecurity {
+    ImplicitTls,
+    StartTls,
+    None,
+}
+
+impl SmtpSecurity {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+            "implicit_tls" | "tls" | "ssl" | "ssl_tls" | "smtps" | "wrapper" => {
+                Ok(Self::ImplicitTls)
+            }
+            "starttls" | "required" | "tls_required" => Ok(Self::StartTls),
+            "none" | "plain" | "local" | "unencrypted" => Ok(Self::None),
+            _ => Err("MAIL_SMTP_SECURITY must be implicit_tls, starttls, or none.".to_string()),
+        }
+    }
+
+    fn default_port(self) -> u16 {
+        match self {
+            Self::ImplicitTls => DEFAULT_SMTP_IMPLICIT_TLS_PORT,
+            Self::StartTls => DEFAULT_SMTP_STARTTLS_PORT,
+            Self::None => DEFAULT_SMTP_PORT,
+        }
+    }
 }
 
 impl Mailer {
@@ -118,15 +135,21 @@ impl Mailer {
             "smtp" => {
                 let host =
                     env::var("MAIL_SMTP_HOST").unwrap_or_else(|_| DEFAULT_SMTP_HOST.to_string());
-                let port = env::var("MAIL_SMTP_PORT")
+                let configured_port = env::var("MAIL_SMTP_PORT")
                     .ok()
                     .map(|value| {
                         value
                             .parse::<u16>()
                             .map_err(|_| "MAIL_SMTP_PORT must be a valid port.".to_string())
                     })
+                    .transpose()?;
+                let security = env::var("MAIL_SMTP_SECURITY")
+                    .ok()
+                    .filter(|value| !value.trim().is_empty())
+                    .map(|value| SmtpSecurity::parse(&value))
                     .transpose()?
-                    .unwrap_or(DEFAULT_SMTP_PORT);
+                    .unwrap_or_else(|| infer_smtp_security(&host, configured_port));
+                let port = configured_port.unwrap_or_else(|| security.default_port());
                 let helo_name = env::var("MAIL_SMTP_HELO_NAME")
                     .ok()
                     .filter(|value| !value.trim().is_empty())
@@ -154,16 +177,31 @@ impl Mailer {
                     );
                 }
 
+                if is_production && security == SmtpSecurity::None && !is_loopback_smtp_host(&host)
+                {
+                    return Err(
+                        "MAIL_SMTP_SECURITY=none is only allowed for a local relay in production."
+                            .to_string(),
+                    );
+                }
+
+                if is_production && !is_loopback_smtp_host(&host) && username.is_none() {
+                    return Err(
+                        "Production SMTP relays outside localhost must set MAIL_SMTP_USERNAME and MAIL_SMTP_PASSWORD."
+                            .to_string(),
+                    );
+                }
+
+                let timeout = Duration::from_secs(timeout_seconds.max(1));
+                let transport = build_smtp_transport(
+                    &host, port, security, &helo_name, username, password, timeout,
+                )?;
+
                 Ok(Mailer::Smtp(SmtpMailer {
                     from_name,
                     from_email,
                     web_origin,
-                    host,
-                    port,
-                    helo_name,
-                    username,
-                    password,
-                    timeout: Duration::from_secs(timeout_seconds.max(1)),
+                    transport,
                 }))
             }
             _ => Err("MAIL_MODE must be either log or smtp.".to_string()),
@@ -230,87 +268,12 @@ impl Mailer {
 
 impl SmtpMailer {
     async fn send(&self, message: MailMessage) -> Result<(), MailError> {
-        let stream = timeout(
-            self.timeout,
-            TcpStream::connect((self.host.as_str(), self.port)),
-        )
-        .await
-        .map_err(|_| MailError::new("SMTP connection timed out."))?
-        .map_err(|err| MailError::new(format!("SMTP connection failed: {err}")))?;
-
-        let mut reader = BufReader::new(stream);
-        expect_response(&mut reader, self.timeout, &[220]).await?;
-
-        send_line(
-            &mut reader,
-            self.timeout,
-            &format!("EHLO {}", self.helo_name),
-        )
-        .await?;
-        let ehlo_response = read_response(&mut reader, self.timeout).await?;
-        if ehlo_response.code != 250 {
-            send_line(
-                &mut reader,
-                self.timeout,
-                &format!("HELO {}", self.helo_name),
-            )
-            .await?;
-            expect_response(&mut reader, self.timeout, &[250]).await?;
-        }
-
-        if let (Some(username), Some(password)) = (&self.username, &self.password) {
-            send_line(&mut reader, self.timeout, "AUTH LOGIN").await?;
-            expect_response(&mut reader, self.timeout, &[334]).await?;
-            send_line(
-                &mut reader,
-                self.timeout,
-                &base64_encode(username.as_bytes()),
-            )
-            .await?;
-            expect_response(&mut reader, self.timeout, &[334]).await?;
-            send_line(
-                &mut reader,
-                self.timeout,
-                &base64_encode(password.as_bytes()),
-            )
-            .await?;
-            expect_response(&mut reader, self.timeout, &[235]).await?;
-        }
-
-        send_line(
-            &mut reader,
-            self.timeout,
-            &format!("MAIL FROM:<{}>", self.from_email),
-        )
-        .await?;
-        expect_response(&mut reader, self.timeout, &[250]).await?;
-
-        send_line(
-            &mut reader,
-            self.timeout,
-            &format!("RCPT TO:<{}>", message.to_email),
-        )
-        .await?;
-        expect_response(&mut reader, self.timeout, &[250, 251]).await?;
-
-        send_line(&mut reader, self.timeout, "DATA").await?;
-        expect_response(&mut reader, self.timeout, &[354]).await?;
-
-        let raw_message = format!(
-            "{}\r\n.\r\n",
-            dot_stuff(&format_message(
-                &self.from_name,
-                &self.from_email,
-                &message
-            )?)
-        );
-        write_all(&mut reader, self.timeout, raw_message.as_bytes()).await?;
-        expect_response(&mut reader, self.timeout, &[250]).await?;
-
-        send_line(&mut reader, self.timeout, "QUIT").await?;
-        let _ = read_response(&mut reader, self.timeout).await;
-
-        Ok(())
+        let email = build_lettre_message(&self.from_name, &self.from_email, &message)?;
+        self.transport
+            .send(email)
+            .await
+            .map(|_| ())
+            .map_err(|err| MailError::new(format!("SMTP delivery failed: {err}")))
     }
 }
 
@@ -350,37 +313,66 @@ fn build_password_reset_message(
     })
 }
 
-fn format_message(
+fn build_smtp_transport(
+    host: &str,
+    port: u16,
+    security: SmtpSecurity,
+    helo_name: &str,
+    username: Option<String>,
+    password: Option<String>,
+    duration: Duration,
+) -> Result<AsyncSmtpTransport<Tokio1Executor>, String> {
+    let mut builder = match security {
+        SmtpSecurity::ImplicitTls => AsyncSmtpTransport::<Tokio1Executor>::relay(host)
+            .map_err(|err| format!("MAIL_SMTP_HOST TLS configuration failed: {err}"))?,
+        SmtpSecurity::StartTls => AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(host)
+            .map_err(|err| format!("MAIL_SMTP_HOST STARTTLS configuration failed: {err}"))?,
+        SmtpSecurity::None => AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(host),
+    }
+    .port(port)
+    .timeout(Some(duration));
+
+    let helo_name = helo_name.trim();
+    if !helo_name.is_empty() {
+        builder = builder.hello_name(ClientId::Domain(helo_name.to_string()));
+    }
+
+    if let (Some(username), Some(password)) = (username, password) {
+        builder = builder.credentials(Credentials::new(username, password));
+    }
+
+    Ok(builder.build())
+}
+
+fn build_lettre_message(
     from_name: &str,
     from_email: &str,
     message: &MailMessage,
-) -> Result<String, MailError> {
+) -> Result<LettreMessage, MailError> {
     let subject = sanitize_header_value(&message.subject)?;
-    let to_email = sanitize_header_value(&message.to_email)?;
-    let message_id_domain = from_email.split('@').nth(1).unwrap_or("localhost");
+    let from_address = parse_mail_address(from_email, "Invalid sender email address.")?;
+    let to_address = parse_mail_address(&message.to_email, "Invalid recipient email address.")?;
+    let from_name = sanitize_header_value(from_name)?;
+    let from = if from_name.trim().is_empty() {
+        Mailbox::new(None, from_address)
+    } else {
+        Mailbox::new(Some(from_name), from_address)
+    };
 
-    Ok(format!(
-        "From: {}\r\nTo: <{}>\r\nSubject: {}\r\nDate: {}\r\nMessage-ID: <{}@{}>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n{}",
-        format_mailbox(from_name, from_email)?,
-        to_email,
-        subject,
-        Utc::now().to_rfc2822(),
-        Uuid::new_v4(),
-        sanitize_header_value(message_id_domain)?,
-        normalize_body_newlines(&message.text_body)
-    ))
+    LettreMessage::builder()
+        .from(from)
+        .to(Mailbox::new(None, to_address))
+        .subject(subject)
+        .header(ContentType::TEXT_PLAIN)
+        .body(message.text_body.clone())
+        .map_err(|err| MailError::new(format!("Failed to build email message: {err}")))
 }
 
-fn format_mailbox(name: &str, email: &str) -> Result<String, MailError> {
-    validate_email_address(email)?;
-    let email = sanitize_header_value(email)?;
-    let name = sanitize_header_value(name)?;
-
-    if name.trim().is_empty() {
-        Ok(format!("<{email}>"))
-    } else {
-        Ok(format!("\"{}\" <{}>", escape_quoted_header(&name), email))
-    }
+fn parse_mail_address(value: &str, error_message: &str) -> Result<Address, MailError> {
+    validate_email_address(value)?;
+    value
+        .parse::<Address>()
+        .map_err(|_| MailError::new(error_message))
 }
 
 fn validate_email_address(email: &str) -> Result<(), MailError> {
@@ -399,130 +391,80 @@ fn sanitize_header_value(value: &str) -> Result<String, MailError> {
     Ok(value.trim().to_string())
 }
 
-fn escape_quoted_header(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
-fn normalize_body_newlines(value: &str) -> String {
-    value
-        .replace("\r\n", "\n")
-        .replace('\r', "\n")
-        .replace('\n', "\r\n")
-}
-
-fn dot_stuff(message: &str) -> String {
-    message
-        .lines()
-        .map(|line| {
-            if line.starts_with('.') {
-                format!(".{line}")
-            } else {
-                line.to_string()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\r\n")
-}
-
-async fn send_line(
-    reader: &mut BufReader<TcpStream>,
-    duration: Duration,
-    line: &str,
-) -> Result<(), MailError> {
-    let line = format!("{line}\r\n");
-    write_all(reader, duration, line.as_bytes()).await
-}
-
-async fn write_all(
-    reader: &mut BufReader<TcpStream>,
-    duration: Duration,
-    bytes: &[u8],
-) -> Result<(), MailError> {
-    timeout(duration, reader.get_mut().write_all(bytes))
-        .await
-        .map_err(|_| MailError::new("SMTP write timed out."))?
-        .map_err(|err| MailError::new(format!("SMTP write failed: {err}")))
-}
-
-async fn expect_response(
-    reader: &mut BufReader<TcpStream>,
-    duration: Duration,
-    accepted_codes: &[u16],
-) -> Result<SmtpResponse, MailError> {
-    let response = read_response(reader, duration).await?;
-    if accepted_codes.contains(&response.code) {
-        Ok(response)
-    } else {
-        Err(MailError::new(format!(
-            "SMTP server returned {}: {}",
-            response.code,
-            response.lines.join(" | ")
-        )))
+fn infer_smtp_security(host: &str, port: Option<u16>) -> SmtpSecurity {
+    match port {
+        Some(DEFAULT_SMTP_IMPLICIT_TLS_PORT | 2465) => SmtpSecurity::ImplicitTls,
+        Some(DEFAULT_SMTP_STARTTLS_PORT | 2587) => SmtpSecurity::StartTls,
+        Some(DEFAULT_SMTP_PORT) if is_loopback_smtp_host(host) => SmtpSecurity::None,
+        Some(_) if is_loopback_smtp_host(host) => SmtpSecurity::None,
+        Some(_) => SmtpSecurity::StartTls,
+        None if is_loopback_smtp_host(host) => SmtpSecurity::None,
+        None => SmtpSecurity::StartTls,
     }
 }
 
-async fn read_response(
-    reader: &mut BufReader<TcpStream>,
-    duration: Duration,
-) -> Result<SmtpResponse, MailError> {
-    let mut lines = Vec::new();
-
-    loop {
-        let mut line = String::new();
-        let bytes_read = timeout(duration, reader.read_line(&mut line))
-            .await
-            .map_err(|_| MailError::new("SMTP read timed out."))?
-            .map_err(|err| MailError::new(format!("SMTP read failed: {err}")))?;
-
-        if bytes_read == 0 {
-            return Err(MailError::new("SMTP server closed the connection."));
-        }
-
-        let trimmed = line.trim_end_matches(['\r', '\n']).to_string();
-        if trimmed.len() < 3 {
-            return Err(MailError::new("SMTP server returned a malformed response."));
-        }
-
-        let parsed_code = trimmed[0..3]
-            .parse::<u16>()
-            .map_err(|_| MailError::new("SMTP server returned a malformed status code."))?;
-        let is_last_line = trimmed.as_bytes().get(3).copied() != Some(b'-');
-
-        lines.push(trimmed);
-
-        if is_last_line {
-            return Ok(SmtpResponse {
-                code: parsed_code,
-                lines,
-            });
-        }
-    }
+fn is_loopback_smtp_host(host: &str) -> bool {
+    matches!(
+        host.trim().to_ascii_lowercase().as_str(),
+        "localhost" | "127.0.0.1" | "::1" | "[::1]"
+    )
 }
 
-fn base64_encode(bytes: &[u8]) -> String {
-    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut encoded = String::new();
+#[cfg(test)]
+mod tests {
+    use super::{SmtpSecurity, infer_smtp_security, is_loopback_smtp_host, parse_mail_address};
 
-    for chunk in bytes.chunks(3) {
-        let b0 = chunk[0];
-        let b1 = *chunk.get(1).unwrap_or(&0);
-        let b2 = *chunk.get(2).unwrap_or(&0);
-
-        encoded.push(TABLE[(b0 >> 2) as usize] as char);
-        encoded.push(TABLE[(((b0 & 0b0000_0011) << 4) | (b1 >> 4)) as usize] as char);
-
-        if chunk.len() > 1 {
-            encoded.push(TABLE[(((b1 & 0b0000_1111) << 2) | (b2 >> 6)) as usize] as char);
-        } else {
-            encoded.push('=');
-        }
-
-        if chunk.len() > 2 {
-            encoded.push(TABLE[(b2 & 0b0011_1111) as usize] as char);
-        } else {
-            encoded.push('=');
-        }
+    #[test]
+    fn smtp_security_accepts_common_provider_terms() {
+        assert_eq!(
+            SmtpSecurity::parse("implicit_tls").expect("implicit tls should parse"),
+            SmtpSecurity::ImplicitTls
+        );
+        assert_eq!(
+            SmtpSecurity::parse("smtps").expect("smtps should parse"),
+            SmtpSecurity::ImplicitTls
+        );
+        assert_eq!(
+            SmtpSecurity::parse("STARTTLS").expect("starttls should parse"),
+            SmtpSecurity::StartTls
+        );
+        assert_eq!(
+            SmtpSecurity::parse("plain").expect("plain should parse"),
+            SmtpSecurity::None
+        );
     }
 
-    encoded
+    #[test]
+    fn smtp_security_infers_from_host_and_port() {
+        assert_eq!(
+            infer_smtp_security("smtp.resend.com", Some(465)),
+            SmtpSecurity::ImplicitTls
+        );
+        assert_eq!(
+            infer_smtp_security("smtp.resend.com", Some(587)),
+            SmtpSecurity::StartTls
+        );
+        assert_eq!(
+            infer_smtp_security("127.0.0.1", Some(25)),
+            SmtpSecurity::None
+        );
+        assert_eq!(
+            infer_smtp_security("smtp.example.com", None),
+            SmtpSecurity::StartTls
+        );
+    }
+
+    #[test]
+    fn loopback_detection_allows_common_local_relay_hosts() {
+        assert!(is_loopback_smtp_host("localhost"));
+        assert!(is_loopback_smtp_host("127.0.0.1"));
+        assert!(is_loopback_smtp_host("::1"));
+        assert!(!is_loopback_smtp_host("smtp.example.com"));
+    }
+
+    #[test]
+    fn mail_address_parsing_rejects_header_injection() {
+        assert!(parse_mail_address("person@example.com", "bad").is_ok());
+        assert!(parse_mail_address("person@example.com\r\nBcc: other@example.com", "bad").is_err());
+    }
 }

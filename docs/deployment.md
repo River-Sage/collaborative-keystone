@@ -81,8 +81,11 @@ API:
 - `PUBLIC_API_ORIGIN=https://api.worldkeystone.com`
 - `MAIL_MODE=smtp`
 - `MAIL_FROM_EMAIL=no-reply@worldkeystone.com`
-- `MAIL_SMTP_HOST=127.0.0.1`
-- `MAIL_SMTP_PORT=25`
+- `MAIL_SMTP_HOST=smtp.resend.com`
+- `MAIL_SMTP_PORT=465`
+- `MAIL_SMTP_SECURITY=implicit_tls`
+- `MAIL_SMTP_USERNAME=resend`
+- `MAIL_SMTP_PASSWORD`
 - `CF_TURNSTILE_SECRET_KEY`
 
 Web build:
@@ -292,18 +295,29 @@ The API has a pluggable mailer:
 - `MAIL_MODE=log` logs verification and password reset emails in development instead of sending real inbox messages. In debug/dev mode, the web UI can also receive local-only verification and reset tokens for testing.
 - `MAIL_MODE=smtp` sends verification and password reset emails to an SMTP relay.
 
-For a no-third-party production path, run a local mail transfer agent on the server and point the API at it with `MAIL_SMTP_HOST=127.0.0.1` and `MAIL_SMTP_PORT=25`.
+Production cannot rely on logged tokens. Account verification and password resets require deliverable email.
 
-Production cannot rely on logged tokens. Account verification and password resets require deliverable email. The current SMTP client supports plain SMTP and optional `AUTH LOGIN`; it does not currently implement STARTTLS. The safest first launch choices are:
+The API supports secure SMTP submission through `MAIL_SMTP_SECURITY`:
 
-- run a local server-side relay/MTA on `127.0.0.1:25` that handles TLS and outbound delivery
-- or add STARTTLS support before using an external SMTP provider that requires encrypted submission on port 587
+- `implicit_tls`: encrypted SMTP from the first byte, normally port `465`
+- `starttls`: connect first, then require STARTTLS before credentials or mail are sent, normally port `587`
+- `none`: unencrypted SMTP, allowed in production only for a local relay such as `127.0.0.1:25`
+
+For the first World Keystone launch, prefer Resend SMTP:
+
+- `MAIL_SMTP_HOST=smtp.resend.com`
+- `MAIL_SMTP_PORT=465`
+- `MAIL_SMTP_SECURITY=implicit_tls`
+- `MAIL_SMTP_USERNAME=resend`
+- `MAIL_SMTP_PASSWORD=<Resend API key>`
+
+Postmark and similar providers may use `MAIL_SMTP_SECURITY=starttls` on port `587` instead.
+
+For a no-third-party production path, run a local mail transfer agent on the server and point the API at it with `MAIL_SMTP_HOST=127.0.0.1`, `MAIL_SMTP_PORT=25`, and `MAIL_SMTP_SECURITY=none`.
 
 For public launch, verify SPF, DKIM, and DMARC for the sending domain and complete a real registration/password-reset test from the live domain before inviting users.
 
-The local mail server, not the web app, should handle outbound delivery, queueing, TLS to receiving mail servers, DKIM signing, bounce handling, and reputation. DNS still needs SPF, DKIM, DMARC, and reverse DNS/PTR configured for the sending host.
-
-The API does not implement STARTTLS itself in this prototype. Use a local trusted relay for production rather than sending credentials over the network.
+When using a local mail server, that mail server should handle outbound delivery, queueing, TLS to receiving mail servers, DKIM signing, bounce handling, and reputation. When using a hosted SMTP provider, that provider normally handles those delivery concerns after the API submits the message securely. DNS still needs SPF, DKIM, and DMARC for the sending domain.
 
 ## Cloudflare Tunnel Notes
 
