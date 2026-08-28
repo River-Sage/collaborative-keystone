@@ -56,6 +56,7 @@ pub struct MailMessage {
     pub to_email: String,
     pub subject: String,
     pub text_body: String,
+    pub html_body: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -64,6 +65,8 @@ struct ResendEmailRequest {
     to: Vec<String>,
     subject: String,
     text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    html: Option<String>,
 }
 
 #[derive(Debug)]
@@ -387,8 +390,16 @@ fn build_verification_message(
         to_email: to_email.to_string(),
         subject: "Verify your World Keystone account".to_string(),
         text_body: format!(
-            "Your World Keystone verification token is:\n\n{token}\n\nIt expires in 24 hours.\n\nOpen {web_origin} and paste this token into the email verification form.\n\nIf you did not request this, you can ignore this message.",
+            "Your World Keystone verification code is:\n\n{token}\n\nCopy only that code and paste it into World Keystone.\n\nIt expires in 24 hours.\n\nOpen World Keystone: {web_origin}\n\nIf you did not request this, you can ignore this message.",
         ),
+        html_body: Some(code_email_html(
+            "Verify your World Keystone account",
+            "Your verification code is:",
+            token,
+            "Copy only this code and paste it into World Keystone. It expires in 24 hours.",
+            "Open World Keystone",
+            web_origin,
+        )),
     })
 }
 
@@ -405,8 +416,16 @@ fn build_password_reset_message(
         to_email: to_email.to_string(),
         subject: "Reset your World Keystone password".to_string(),
         text_body: format!(
-            "Your World Keystone password reset token is:\n\n{token}\n\nIt expires in 1 hour.\n\nOpen {web_origin} and paste this token into the password reset form.\n\nIf you did not request this, you can ignore this message.",
+            "Your World Keystone password reset code is:\n\n{token}\n\nCopy only that code and paste it into World Keystone.\n\nIt expires in 1 hour.\n\nOpen World Keystone: {web_origin}\n\nIf you did not request this, you can ignore this message.",
         ),
+        html_body: Some(code_email_html(
+            "Reset your World Keystone password",
+            "Your password reset code is:",
+            token,
+            "Copy only this code and paste it into World Keystone. It expires in 1 hour.",
+            "Open World Keystone",
+            web_origin,
+        )),
     })
 }
 
@@ -455,6 +474,7 @@ fn build_resend_request(
         to: vec![to_address.to_string()],
         subject,
         text: message.text_body.clone(),
+        html: message.html_body.clone(),
     })
 }
 
@@ -492,6 +512,49 @@ fn format_resend_mailbox(name: &str, email: &str) -> Result<String, MailError> {
     } else {
         Ok(format!("{name} <{email}>"))
     }
+}
+
+fn code_email_html(
+    title: &str,
+    intro: &str,
+    code: &str,
+    note: &str,
+    link_label: &str,
+    link_url: &str,
+) -> String {
+    let title = escape_html(title);
+    let intro = escape_html(intro);
+    let code = escape_html(code);
+    let note = escape_html(note);
+    let link_label = escape_html(link_label);
+    let link_url = escape_html(link_url);
+
+    format!(
+        r#"<!doctype html>
+<html>
+  <body style="margin:0;padding:0;background:#f6f7f6;color:#111;font-family:Inter,Arial,sans-serif;">
+    <div style="max-width:560px;margin:0 auto;padding:32px 20px;">
+      <div style="background:#ffffff;border:1px solid #e5e7e5;border-radius:14px;padding:28px;">
+        <h1 style="margin:0 0 16px;font-size:22px;line-height:1.25;font-weight:700;color:#111;">{title}</h1>
+        <p style="margin:0 0 14px;font-size:15px;line-height:1.6;color:#333;">{intro}</p>
+        <div style="margin:18px 0;padding:18px;border-radius:10px;background:#f0f7f2;border:1px solid #cfe7d5;text-align:center;font-size:24px;line-height:1.35;font-weight:700;letter-spacing:1px;color:#163b22;font-family:Consolas,Menlo,monospace;">{code}</div>
+        <p style="margin:0 0 18px;font-size:15px;line-height:1.6;color:#333;">{note}</p>
+        <p style="margin:0 0 18px;"><a href="{link_url}" style="color:#174ea6;text-decoration:none;font-size:15px;font-weight:700;">{link_label}</a></p>
+        <p style="margin:0;font-size:13px;line-height:1.5;color:#777;">If you did not request this, you can ignore this message.</p>
+      </div>
+    </div>
+  </body>
+</html>"#
+    )
+}
+
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }
 
 fn parse_mail_address(value: &str, error_message: &str) -> Result<Address, MailError> {
@@ -549,8 +612,8 @@ fn concise_response_body(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        MailMessage, SmtpSecurity, build_resend_request, format_resend_mailbox,
-        infer_smtp_security, is_loopback_smtp_host, parse_mail_address,
+        MailMessage, SmtpSecurity, build_resend_request, build_verification_message,
+        format_resend_mailbox, infer_smtp_security, is_loopback_smtp_host, parse_mail_address,
     };
 
     #[test]
@@ -616,6 +679,7 @@ mod tests {
                 to_email: "person@example.com".to_string(),
                 subject: "Verify your World Keystone account".to_string(),
                 text_body: "Token: abc123".to_string(),
+                html_body: Some("<p>Token: abc123</p>".to_string()),
             },
         )
         .expect("resend request should build");
@@ -624,6 +688,7 @@ mod tests {
         assert_eq!(request.to, vec!["person@example.com".to_string()]);
         assert_eq!(request.subject, "Verify your World Keystone account");
         assert_eq!(request.text, "Token: abc123");
+        assert_eq!(request.html.as_deref(), Some("<p>Token: abc123</p>"));
     }
 
     #[test]
@@ -635,5 +700,25 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn verification_message_is_readable_and_does_not_leak_newline_escapes() {
+        let message = build_verification_message(
+            "no-reply@worldkeystone.com",
+            "https://worldkeystone.com",
+            "person@example.com",
+            "abc123CODE",
+        )
+        .expect("verification message should build");
+
+        assert!(message.text_body.contains("\n\nabc123CODE\n\n"));
+        assert!(!message.text_body.contains("\\n"));
+        assert!(message.text_body.contains("Copy only that code"));
+        let html = message
+            .html_body
+            .expect("verification email should include html");
+        assert!(html.contains("abc123CODE"));
+        assert!(html.contains("Copy only this code"));
     }
 }
