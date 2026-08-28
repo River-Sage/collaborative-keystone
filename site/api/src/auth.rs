@@ -1074,7 +1074,9 @@ async fn enforce_turnstile(
     let token = turnstile_token
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| AppError::BadRequest("Human check is required.".to_string()))?;
+        .ok_or_else(|| {
+            AppError::BadRequest("Complete the human check and try again.".to_string())
+        })?;
 
     let mut form = vec![
         ("secret".to_string(), secret),

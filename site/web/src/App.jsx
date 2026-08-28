@@ -303,6 +303,24 @@ function wait(ms) {
 
 let turnstileScriptPromise = null;
 
+function waitForTurnstileGlobal() {
+  return new Promise((resolve, reject) => {
+    const startedAt = Date.now();
+    const check = () => {
+      if (window.turnstile?.render) {
+        resolve(window.turnstile);
+        return;
+      }
+      if (Date.now() - startedAt > 7000) {
+        reject(new Error("Turnstile did not initialize."));
+        return;
+      }
+      window.setTimeout(check, 100);
+    };
+    check();
+  });
+}
+
 function loadTurnstileScript() {
   if (typeof window === "undefined") {
     return Promise.reject(new Error("Turnstile requires a browser."));
@@ -319,9 +337,9 @@ function loadTurnstileScript() {
   turnstileScriptPromise = new Promise((resolve, reject) => {
     const existingScript = document.getElementById(TURNSTILE_SCRIPT_ID);
     if (existingScript) {
-      existingScript.addEventListener("load", () => resolve(window.turnstile), {
-        once: true,
-      });
+      existingScript.addEventListener("load", () => {
+        waitForTurnstileGlobal().then(resolve).catch(reject);
+      }, { once: true });
       existingScript.addEventListener("error", reject, { once: true });
       return;
     }
@@ -331,7 +349,9 @@ function loadTurnstileScript() {
     script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
     script.async = true;
     script.defer = true;
-    script.onload = () => resolve(window.turnstile);
+    script.onload = () => {
+      waitForTurnstileGlobal().then(resolve).catch(reject);
+    };
     script.onerror = reject;
     document.head.appendChild(script);
   });
@@ -339,13 +359,14 @@ function loadTurnstileScript() {
   return turnstileScriptPromise;
 }
 
-function TurnstileWidget({ action, resetKey, siteKey, onToken }) {
+function TurnstileWidget({ action, resetKey, siteKey, onStatus, onToken }) {
   const containerRef = useRef(null);
   const widgetIdRef = useRef(null);
 
   useEffect(() => {
     let cancelled = false;
     onToken("");
+    onStatus(siteKey ? "loading" : "idle");
 
     if (!siteKey) return undefined;
 
@@ -353,25 +374,46 @@ function TurnstileWidget({ action, resetKey, siteKey, onToken }) {
       .then((turnstile) => {
         if (cancelled || !containerRef.current || !turnstile?.render) return;
 
+        onStatus("ready");
         widgetIdRef.current = turnstile.render(containerRef.current, {
           sitekey: siteKey,
           action,
           theme: "light",
-          callback: (token) => onToken(token || ""),
-          "expired-callback": () => onToken(""),
-          "error-callback": () => onToken(""),
+          callback: (token) => {
+            onToken(token || "");
+            onStatus(token ? "complete" : "ready");
+          },
+          "expired-callback": () => {
+            onToken("");
+            onStatus("expired");
+          },
+          "error-callback": () => {
+            onToken("");
+            onStatus("error");
+          },
+          "timeout-callback": () => {
+            onToken("");
+            onStatus("expired");
+          },
+          "unsupported-callback": () => {
+            onToken("");
+            onStatus("error");
+          },
         });
       })
-      .catch(() => onToken(""));
+      .catch(() => {
+        onToken("");
+        onStatus("error");
+      });
 
     return () => {
       cancelled = true;
-      if (widgetIdRef.current && window.turnstile?.remove) {
+      if (widgetIdRef.current != null && window.turnstile?.remove) {
         window.turnstile.remove(widgetIdRef.current);
       }
       widgetIdRef.current = null;
     };
-  }, [action, onToken, resetKey, siteKey]);
+  }, [action, onStatus, onToken, resetKey, siteKey]);
 
   if (!siteKey) return null;
 
@@ -380,6 +422,21 @@ function TurnstileWidget({ action, resetKey, siteKey, onToken }) {
       <div ref={containerRef} />
     </div>
   );
+}
+
+function authModeNeedsTurnstile(authMode) {
+  return (
+    Boolean(TURNSTILE_SITE_KEY) &&
+    (authMode === "register" || authMode === "resetRequest")
+  );
+}
+
+function turnstileStatusMessage(status) {
+  if (status === "loading") return "Human check loading...";
+  if (status === "ready") return "Complete the human check.";
+  if (status === "expired") return "Human check expired. Try again.";
+  if (status === "error") return "Human check could not load. Refresh and try again.";
+  return "";
 }
 
 function App() {
@@ -405,6 +462,7 @@ function App() {
   const [passwordResetNewPassword, setPasswordResetNewPassword] = useState("");
   const [passwordResetConfirmPassword, setPasswordResetConfirmPassword] = useState("");
   const [turnstileToken, setTurnstileToken] = useState("");
+  const [turnstileStatus, setTurnstileStatus] = useState("idle");
   const [turnstileWidgetResetKey, setTurnstileWidgetResetKey] = useState(0);
   const [verificationToken, setVerificationToken] = useState("");
   const [pendingDevVerificationToken, setPendingDevVerificationToken] =
@@ -859,6 +917,7 @@ function App() {
     setPasswordResetNewPassword("");
     setPasswordResetConfirmPassword("");
     setTurnstileToken("");
+    setTurnstileStatus("idle");
     setTurnstileWidgetResetKey((current) => current + 1);
   }
 
@@ -900,6 +959,7 @@ function App() {
     setPasswordResetNewPassword("");
     setPasswordResetConfirmPassword("");
     setTurnstileToken("");
+    setTurnstileStatus("idle");
     setTurnstileWidgetResetKey((current) => current + 1);
   }
 
@@ -1079,9 +1139,7 @@ function App() {
   async function handleAuthSubmit(event) {
     event.preventDefault();
 
-    const authNeedsTurnstile =
-      Boolean(TURNSTILE_SITE_KEY) &&
-      (authMode === "register" || authMode === "resetRequest");
+    const authNeedsTurnstile = authModeNeedsTurnstile(authMode);
 
     if (authMode === "register" && password !== confirmPassword) {
       setAuthError("Passwords must match.");
@@ -3927,6 +3985,12 @@ function App() {
     );
   }
 
+  const authNeedsTurnstile = authModeNeedsTurnstile(authMode);
+  const authTurnstileBlocked = authNeedsTurnstile && !turnstileToken;
+  const authTurnstileMessage = authNeedsTurnstile
+    ? turnstileStatusMessage(turnstileStatus)
+    : "";
+
   if (!me) {
     return (
       <div className="app-shell">
@@ -4030,20 +4094,24 @@ function App() {
               </>
             ) : null}
 
-            {TURNSTILE_SITE_KEY &&
-            (authMode === "register" || authMode === "resetRequest") ? (
+            {authNeedsTurnstile ? (
               <TurnstileWidget
                 action={authMode === "register" ? "register" : "password_reset"}
                 resetKey={turnstileWidgetResetKey}
                 siteKey={TURNSTILE_SITE_KEY}
+                onStatus={setTurnstileStatus}
                 onToken={setTurnstileToken}
               />
+            ) : null}
+
+            {authTurnstileMessage ? (
+              <p className="turnstile-status">{authTurnstileMessage}</p>
             ) : null}
 
             {authError ? <div className="error-box">{authError}</div> : null}
             {authSuccess ? <div className="success-box">{authSuccess}</div> : null}
 
-            <button type="submit" disabled={authLoading}>
+            <button type="submit" disabled={authLoading || authTurnstileBlocked}>
               {authLoading
                 ? "Working..."
                 : authMode === "login"

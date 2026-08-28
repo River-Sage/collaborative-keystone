@@ -271,6 +271,13 @@ button:hover {
   min-height: 70px;
 }
 
+.turnstile-status {
+  margin: -6px 0 0;
+  color: #637789;
+  font-size: 0.9rem;
+  font-weight: 300;
+}
+
 .prototype-accounts {
   display: grid;
   gap: 10px;
