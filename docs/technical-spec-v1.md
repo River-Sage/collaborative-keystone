@@ -68,6 +68,8 @@ At the end of the calendar month, the cycle closes. During closeout, winners are
 
 For v1, cycle boundaries are anchored to UTC month boundaries: `00:00:00 UTC` on the first day of a month through `00:00:00 UTC` on the first day of the next month. A fresh deployment that starts mid-month joins the current UTC calendar month instead of opening a rolling 30-day launch cycle. Future locale deployments may add locale-specific timezone boundaries if the project decides that local civic calendars are more appropriate for non-global instances.
 
+Any manual first-cycle launch exception that extends an active cycle must update both `submission_ends_at` and `voting_ends_at`, must preserve the normal UTC boundary model for future cycles, and must be recorded in `deployment_audit_events` with the old deadline, new deadline, locale, cycle number, reason, and operator request context.
+
 ### 3.2 Concurrent board behavior
 
 At any given time:
