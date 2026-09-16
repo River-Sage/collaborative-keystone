@@ -110,6 +110,10 @@ const DEFAULT_LOCALE_NAME = "World";
 const DEFAULT_SOURCE_REPOSITORY_URL =
   "https://github.com/River-Sage/collaborative-keystone";
 const AGPL_LICENSE_URL = "https://www.gnu.org/licenses/agpl-3.0.en.html";
+const TURNSTILE_PRIVACY_URL =
+  "https://www.cloudflare.com/application/privacypolicy/turnstile/";
+const LOCALE_OPERATOR_DOC_PATH = "docs/locale-operator-quickstart.md";
+const RELEASE_PROVENANCE_DOC_PATH = "docs/release-signing-and-provenance.md";
 const TRUST_STATUS_LABELS = {
   canonical: "Official global",
   official: "Official",
@@ -4082,6 +4086,161 @@ function App() {
     );
   }
 
+  function renderThirdPartySecurityDisclosure() {
+    if (!TURNSTILE_SITE_KEY) return null;
+
+    return (
+      <p className="source-trust-note">
+        Account creation and password resets use{" "}
+        <a href={TURNSTILE_PRIVACY_URL} target="_blank" rel="noreferrer">
+          Cloudflare Turnstile
+        </a>{" "}
+        to limit automated abuse.
+      </p>
+    );
+  }
+
+  function repositoryDocumentUrl(path) {
+    const normalizedRepositoryUrl = sourceRepositoryUrl.replace(/\.git$/, "");
+    return `${normalizedRepositoryUrl}/blob/main/${path}`;
+  }
+
+  function renderAboutDisclosure() {
+    const localeOperatorUrl = repositoryDocumentUrl(LOCALE_OPERATOR_DOC_PATH);
+    const releaseProvenanceUrl = repositoryDocumentUrl(RELEASE_PROVENANCE_DOC_PATH);
+
+    return (
+      <details className="about-disclosure" id="about">
+        <summary>About</summary>
+        <div className="about-content">
+          <section>
+            <h2>What does World Keystone do?</h2>
+            <p>
+              World Keystone helps people decide what matters most, then keeps
+              that decision moving.
+            </p>
+            <p>
+              Each month, people submit issues they think deserve attention.
+              Everyone reviews real submissions from real people, then votes on
+              the issues they think matter most. When the month ends, the top
+              issue is published. The next cycle focuses on solutions for that
+              winning issue. People submit and vote on solutions, and the top
+              solution moves into implementation.
+            </p>
+            <p>
+              From there, Keystone tracks the work until it is completed. The
+              goal is simple: turn public concern into a visible process for
+              issues, solutions, implementation, and accountability.
+            </p>
+          </section>
+
+          <section>
+            <h2>FAQ</h2>
+            <div className="about-faq-list">
+              <article>
+                <h3>Do I need an account?</h3>
+                <p>
+                  Yes. Guests are locked out for now so the site can reduce
+                  spam, bots, and inauthentic participation.
+                </p>
+              </article>
+              <article>
+                <h3>Why do I have to verify my email?</h3>
+                <p>
+                  To help keep participation real and reduce spam, bots, and
+                  duplicate or inauthentic accounts. Keystone only uses your
+                  email for account access, verification, password resets, and
+                  important site notices. We do not sell your information or use
+                  it for marketing.
+                </p>
+              </article>
+              <article>
+                <h3>Why is there a human check?</h3>
+                <p>
+                  Account creation and password resets use Cloudflare Turnstile
+                  to help limit automated abuse.
+                </p>
+              </article>
+              <article>
+                <h3>Can I submit and vote in the same month?</h3>
+                <p>
+                  Yes. Each cycle is active for the month. You can submit,
+                  review, vote, flag, and discuss during the same cycle.
+                </p>
+              </article>
+              <article>
+                <h3>Why do I have to review submissions first?</h3>
+                <p>
+                  Voting should come after seeing what other people submitted.
+                  The required review pool makes sure people participate with
+                  context before voting freely.
+                </p>
+              </article>
+              <article>
+                <h3>Are vote counts visible?</h3>
+                <p>
+                  Not during the active cycle. Live vote counts are hidden so
+                  people vote honestly. After the cycle ends, results are
+                  published for auditability.
+                </p>
+              </article>
+              <article>
+                <h3>What happens when an issue wins?</h3>
+                <p>
+                  It becomes the focus for the next solution cycle.
+                </p>
+              </article>
+              <article>
+                <h3>What happens when a solution wins?</h3>
+                <p>
+                  It moves to the Implementations board, where progress can be
+                  tracked.
+                </p>
+              </article>
+              <article>
+                <h3>What if there is no winning issue or solution?</h3>
+                <p>
+                  The cycle still continues. If there is no winning issue, the
+                  Solutions board stays unavailable until there is one. If there
+                  is no winning solution, no new implementation is created from
+                  that cycle.
+                </p>
+              </article>
+              <article>
+                <h3>Can someone start a local Keystone site?</h3>
+                <p>
+                  Eventually, yes. Keystone is being built so a city, county,
+                  region, or community can run its own local version. The public
+                  repository includes setup documents for local operators.
+                </p>
+                <p>
+                  Start with the{" "}
+                  <a href={localeOperatorUrl} target="_blank" rel="noreferrer">
+                    Locale Operator Quickstart
+                  </a>{" "}
+                  and the{" "}
+                  <a href={releaseProvenanceUrl} target="_blank" rel="noreferrer">
+                    Release Signing & Provenance
+                  </a>{" "}
+                  document.
+                </p>
+              </article>
+              <article>
+                <h3>How do I know a local Keystone site is legitimate?</h3>
+                <p>
+                  World Keystone is meant to be the trusted front door. Local
+                  sites should be discoverable through World Keystone, where
+                  users can check the locale, operator status, source code,
+                  license, build details, and trust information.
+                </p>
+              </article>
+            </div>
+          </section>
+        </div>
+      </details>
+    );
+  }
+
   function renderSourceTrustDisclosure() {
     return (
       <details className="source-trust-disclosure">
@@ -4091,6 +4250,7 @@ function App() {
           <span>{sourceTrustBody}</span>
         </div>
         {renderSourceTrustLinks()}
+        {renderThirdPartySecurityDisclosure()}
         {sourceInfoError ? (
           <p className="muted small-muted">{sourceInfoError}</p>
         ) : null}
@@ -4152,6 +4312,7 @@ function App() {
         <div className="auth-card">
           <h1>{brandName}</h1>
           <p className="muted">Checking session...</p>
+          {renderAboutDisclosure()}
           {renderSourceTrustDisclosure()}
         </div>
       </div>
@@ -4376,6 +4537,7 @@ function App() {
             </div>
           ) : null}
 
+          {renderAboutDisclosure()}
           {renderSourceTrustDisclosure()}
           {renderLocaleDirectory()}
         </div>
@@ -4708,6 +4870,7 @@ function App() {
                   </div>
                 </div>
                 {renderSourceTrustLinks()}
+                {renderThirdPartySecurityDisclosure()}
                 {renderLocaleDirectory()}
                 {sourceInfoError ? (
                   <p className="muted small-muted">{sourceInfoError}</p>

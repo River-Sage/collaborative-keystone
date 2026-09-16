@@ -287,6 +287,101 @@ button:hover {
   text-decoration: underline;
 }
 
+.about-disclosure {
+  display: grid;
+  gap: 12px;
+  width: min(100%, 520px);
+  margin: 24px auto 0;
+  color: #52677a;
+  font-size: 0.92rem;
+  line-height: 1.5;
+  text-align: left;
+}
+
+.about-disclosure summary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  justify-self: center;
+  min-height: 34px;
+  padding: 7px 12px;
+  color: #50687c;
+  cursor: pointer;
+  user-select: none;
+  background: #ffffff;
+  border: 1px solid #d7e2ea;
+  border-radius: var(--radius-control);
+  box-shadow: 0 4px 10px rgba(41, 62, 84, 0.04);
+}
+
+.about-disclosure summary::-webkit-details-marker {
+  display: none;
+}
+
+.about-disclosure summary:hover {
+  color: #253748;
+  background: #f8fbfd;
+  border-color: #bfd2df;
+}
+
+.about-content {
+  display: grid;
+  gap: 24px;
+  padding: 16px;
+  background: #f8fbfd;
+  border: 1px solid #e2ebf1;
+  border-radius: var(--radius-control);
+}
+
+.about-content section {
+  display: grid;
+  gap: 10px;
+}
+
+.about-content h2,
+.about-content h3,
+.about-content p {
+  margin: 0;
+}
+
+.about-content h2 {
+  color: #223241;
+  font-size: 1.08rem;
+  font-weight: 400;
+}
+
+.about-content h3 {
+  color: #253748;
+  font-size: 0.94rem;
+  font-weight: 400;
+}
+
+.about-content p {
+  color: #52677a;
+  font-weight: 300;
+}
+
+.about-content a {
+  color: #405b70;
+  text-decoration: none;
+  border-bottom: 1px solid rgba(64, 91, 112, 0.28);
+}
+
+.about-content a:hover {
+  color: #223241;
+  border-bottom-color: rgba(34, 50, 65, 0.52);
+}
+
+.about-faq-list {
+  display: grid;
+  gap: 14px;
+}
+
+.about-faq-list article {
+  display: grid;
+  gap: 4px;
+}
+
 .turnstile-wrap {
   display: flex;
   justify-content: center;
@@ -976,6 +1071,25 @@ code {
 }
 
 .source-trust-links a:hover {
+  color: #253748;
+  border-bottom-color: rgba(37, 55, 72, 0.48);
+}
+
+.source-trust-note {
+  margin: 0;
+  color: #6b7e90;
+  font-size: 0.82rem;
+  font-weight: 300;
+  line-height: 1.45;
+}
+
+.source-trust-note a {
+  color: #50687c;
+  text-decoration: none;
+  border-bottom: 1px solid rgba(80, 104, 124, 0.24);
+}
+
+.source-trust-note a:hover {
   color: #253748;
   border-bottom-color: rgba(37, 55, 72, 0.48);
 }

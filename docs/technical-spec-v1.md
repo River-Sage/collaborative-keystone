@@ -306,6 +306,7 @@ Engineering and deployment tooling must preserve that separation:
 
 * AGPL source availability must not be blocked by encryption, packaging, or appliance-style deployment.
 * Every running web UI should provide a visible Source & Trust entry point from public/login surfaces and the Settings view. That surface should offer Source Code, AGPL License, Build Details, and Locale Data links without making raw registry status legends the default end-user experience.
+* When public account flows use third-party security checks such as Cloudflare Turnstile, the Source & Trust surface must plainly disclose that use and link to the provider's relevant privacy or product information.
 * World Keystone may show a creator support link in Settings. Other locale deployments must not show the World Keystone Patreon link.
 * Signed official releases may be distributed for convenience, but users must still be able to obtain the corresponding source required by the software license.
 * Modified deployments must not claim official status unless they are authorized and verifiably running an approved release/configuration.
@@ -481,7 +482,7 @@ Because proposals are not editable after submission, the UI must show a preview 
 An issue proposal must satisfy the following minimum quality rules:
 
 * describes a tangible real-world problem
-* is specific enough to be distinguishable from general outrage, slogans, or vibes
+* is specific enough to be distinguishable from general outrage, slogans, or broad sentiment
 * is relevant to the active locale
 * is understandable as written
 * is not purely rhetorical
