@@ -4116,21 +4116,24 @@ function App() {
           <section>
             <h2>What does World Keystone do?</h2>
             <p>
-              World Keystone helps people decide what matters most, then keeps
-              that decision moving.
+              World Keystone provides a platform for people to identify and
+              solve problems.
             </p>
             <p>
               Each month, people submit issues they think deserve attention.
-              Everyone reviews real submissions from real people, then votes on
-              the issues they think matter most. When the month ends, the top
-              issue is published. The next cycle focuses on solutions for that
-              winning issue. People submit and vote on solutions, and the top
+              People then vote on each other's submissions. When the month
+              ends, the top issue is published. The next cycle focuses on
+              solutions for that winning issue, while simultaneously identifying
+              another issue. People submit and vote on solutions, and the top
               solution moves into implementation.
             </p>
             <p>
-              From there, Keystone tracks the work until it is completed. The
-              goal is simple: turn public concern into a visible process for
-              issues, solutions, implementation, and accountability.
+              From there, Keystone tracks the work until it is completed.
+            </p>
+            <p>
+              The goal is simple: help good ideas become visible, and give
+              everybody a voice. Keystone turns public concern into a visible
+              process: issues, solutions, and implementations.
             </p>
           </section>
 
@@ -4140,48 +4143,55 @@ function App() {
               <article>
                 <h3>Do I need an account?</h3>
                 <p>
-                  Yes. Guests are locked out for now so the site can reduce
-                  spam, bots, and inauthentic participation.
+                  Yes, in order to reduce spam, bots, and fake participation.
                 </p>
               </article>
               <article>
                 <h3>Why do I have to verify my email?</h3>
                 <p>
-                  To help keep participation real and reduce spam, bots, and
-                  duplicate or inauthentic accounts. Keystone only uses your
-                  email for account access, verification, password resets, and
-                  important site notices. We do not sell your information or use
-                  it for marketing.
+                  To make sure accounts are real enough to participate. The goal
+                  is not to collect personal info; it is to keep the process
+                  from getting flooded with junk. We do not sell your
+                  information or use it for marketing.
                 </p>
               </article>
               <article>
                 <h3>Why is there a human check?</h3>
                 <p>
-                  Account creation and password resets use Cloudflare Turnstile
-                  to help limit automated abuse.
+                  Account creation and password resets use this to help block
+                  automated abuse.
                 </p>
               </article>
               <article>
                 <h3>Can I submit and vote in the same month?</h3>
                 <p>
                   Yes. Each cycle is active for the month. You can submit,
-                  review, vote, flag, and discuss during the same cycle.
+                  review, vote, flag, and discuss during the same cycle. You may
+                  vote on every submission one time, and may change your vote at
+                  any time.
                 </p>
               </article>
               <article>
                 <h3>Why do I have to review submissions first?</h3>
                 <p>
-                  Voting should come after seeing what other people submitted.
-                  The required review pool makes sure people participate with
-                  context before voting freely.
+                  Because voting should come after seeing what other people
+                  submitted. The required review pool is there to make sure
+                  people participate with at least a little context before voting
+                  freely.
+                </p>
+              </article>
+              <article>
+                <h3>Can I vote on my own submission?</h3>
+                <p>
+                  No.
                 </p>
               </article>
               <article>
                 <h3>Are vote counts visible?</h3>
                 <p>
                   Not during the active cycle. Live vote counts are hidden so
-                  people vote honestly. After the cycle ends, results are
-                  published for auditability.
+                  people vote honestly instead of chasing momentum. After the
+                  cycle ends, results are published for auditability.
                 </p>
               </article>
               <article>
@@ -4193,8 +4203,16 @@ function App() {
               <article>
                 <h3>What happens when a solution wins?</h3>
                 <p>
-                  It moves to the Implementations board, where progress can be
+                  It moves to the Implementations board, where progress is
                   tracked.
+                </p>
+              </article>
+              <article>
+                <h3>What are implementations?</h3>
+                <p>
+                  Implementations are where winning solutions stop being
+                  theoretical. The site helps track what is being done, what is
+                  still needed, and whether the work is progressing.
                 </p>
               </article>
               <article>
@@ -4207,22 +4225,68 @@ function App() {
                 </p>
               </article>
               <article>
+                <h3>Can people discuss submissions?</h3>
+                <p>
+                  Yes. Discussion is meant to stay simple: one comment per user
+                  per submission, with comment voting used for sorting, not
+                  public score-chasing.
+                </p>
+              </article>
+              <article>
+                <h3>Can people flag bad submissions?</h3>
+                <p>
+                  Yes. Users can flag duplicates, unclear submissions, unsafe
+                  content, illegal content, or deceptive content. Archived
+                  submissions are maintained for auditability.
+                </p>
+              </article>
+              <article>
+                <h3>Is this only for the whole world?</h3>
+                <p>
+                  No. World Keystone is the central version and the trusted
+                  starting point. The long-term idea is that local versions can
+                  exist too, like Denver Keystone or Summit County Keystone, but
+                  people should discover and trust those through World Keystone.
+                </p>
+              </article>
+              <article>
+                <h3>What is a local Keystone site?</h3>
+                <p>
+                  A local Keystone site is a version of Keystone focused on a
+                  specific place, like a city, county, region, or community. It
+                  runs its own cycles, has its own moderators, and tracks
+                  issues, solutions, and implementations for that locale.
+                </p>
+              </article>
+              <article>
+                <h3>Why should local sites go through World Keystone?</h3>
+                <p>
+                  Because anyone can copy open-source software. World Keystone
+                  is meant to help people tell the difference between an
+                  official or verified Keystone site and an unofficial fork.
+                  Local sites should be listed through World Keystone so users
+                  can check where they are, who operates it, and whether it is
+                  trusted.
+                </p>
+              </article>
+              <article>
                 <h3>Can someone start a local Keystone site?</h3>
                 <p>
                   Eventually, yes. Keystone is being built so a city, county,
-                  region, or community can run its own local version. The public
-                  repository includes setup documents for local operators.
+                  region, or community can run its own local version without
+                  rewriting the app. The public repo includes operator setup
+                  docs, including the local-site quickstart and the trust/release
+                  model.
                 </p>
                 <p>
-                  Start with the{" "}
+                  Start here:{" "}
                   <a href={localeOperatorUrl} target="_blank" rel="noreferrer">
                     Locale Operator Quickstart
                   </a>{" "}
-                  and the{" "}
+                  and{" "}
                   <a href={releaseProvenanceUrl} target="_blank" rel="noreferrer">
                     Release Signing & Provenance
-                  </a>{" "}
-                  document.
+                  </a>.
                 </p>
               </article>
               <article>
