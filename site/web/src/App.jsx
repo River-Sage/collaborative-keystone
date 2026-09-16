@@ -4216,15 +4216,6 @@ function App() {
                 </p>
               </article>
               <article>
-                <h3>What if there is no winning issue or solution?</h3>
-                <p>
-                  The cycle still continues. If there is no winning issue, the
-                  Solutions board stays unavailable until there is one. If there
-                  is no winning solution, no new implementation is created from
-                  that cycle.
-                </p>
-              </article>
-              <article>
                 <h3>Can people discuss submissions?</h3>
                 <p>
                   Yes. Discussion is meant to stay simple: one comment per user
