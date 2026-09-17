@@ -6,10 +6,14 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
-use crate::{auth::SESSION_COOKIE_NAME, error::AppError};
+use crate::{
+    auth::{configured_cookie_name, session_cookie_name},
+    error::AppError,
+};
 
-pub const CSRF_COOKIE_NAME: &str = "ck_csrf";
+pub const DEFAULT_CSRF_COOKIE_NAME: &str = "ck_csrf";
 pub const CSRF_HEADER_NAME: &str = "x-csrf-token";
+const CSRF_COOKIE_NAME_ENV: &str = "CK_CSRF_COOKIE_NAME";
 
 const PUBLIC_POST_PATHS: [&str; 6] = [
     "/auth/login",
@@ -33,11 +37,13 @@ pub async fn validate_csrf(req: Request<Body>, next: Next) -> Response {
         return next.run(req).await;
     };
 
-    if extract_cookie_value(cookie_header, SESSION_COOKIE_NAME).is_none() {
+    let session_cookie_name = session_cookie_name();
+    if extract_cookie_value(cookie_header, &session_cookie_name).is_none() {
         return next.run(req).await;
     }
 
-    let csrf_cookie = extract_cookie_value(cookie_header, CSRF_COOKIE_NAME);
+    let csrf_cookie_name = csrf_cookie_name();
+    let csrf_cookie = extract_cookie_value(cookie_header, &csrf_cookie_name);
     let csrf_header = normalized_header_value(headers, CSRF_HEADER_NAME);
 
     match (csrf_cookie, csrf_header) {
@@ -48,6 +54,10 @@ pub async fn validate_csrf(req: Request<Body>, next: Next) -> Response {
             AppError::Forbidden("Security token is invalid or missing.".to_string()).into_response()
         }
     }
+}
+
+pub fn csrf_cookie_name() -> String {
+    configured_cookie_name(CSRF_COOKIE_NAME_ENV, DEFAULT_CSRF_COOKIE_NAME)
 }
 
 fn normalized_header_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {

@@ -8,7 +8,7 @@ const API_BASE = (import.meta.env.VITE_API_BASE_URL || defaultApiBase).replace(
   ""
 );
 
-const CSRF_COOKIE_NAME = "ck_csrf";
+const CSRF_COOKIE_NAME = import.meta.env.VITE_CSRF_COOKIE_NAME || "ck_csrf";
 
 async function apiFetch(path, options = {}) {
   const method = (options.method || "GET").toUpperCase();

@@ -227,6 +227,17 @@ Example production layout:
 | World | `https://worldkeystone.com` | `127.0.0.1:8088` | `127.0.0.1:8080` | `collaborative_keystone_prod` |
 | Castle Rock | `https://castle-rock.worldkeystone.com` | `127.0.0.1:8089` | `127.0.0.1:8081` | `collaborative_keystone_castle_rock` |
 
+If a new public hostname is not available yet, an early locale can also be proxied through the World hostname at a path such as `https://worldkeystone.com/locales/castle-rock`. In that case the locale must use distinct cookie names and a path-scoped cookie path, for example:
+
+```bash
+CK_SESSION_COOKIE_NAME=ck_cr_session
+CK_CSRF_COOKIE_NAME=ck_cr_csrf
+CK_COOKIE_PATH=/locales/castle-rock
+VITE_API_BASE_URL=/locales/castle-rock/api
+VITE_BASE_PATH=/locales/castle-rock/
+VITE_CSRF_COOKIE_NAME=ck_cr_csrf
+```
+
 Each locale service should use the same release commit, but each locale gets its own environment file:
 
 ```text

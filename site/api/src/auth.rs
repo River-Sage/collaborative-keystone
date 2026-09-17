@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{env, sync::Arc};
 
 use argon2::{
     Argon2, PasswordHasher,
@@ -21,9 +21,9 @@ use sqlx::{PgPool, Row};
 use tracing::error;
 use uuid::Uuid;
 
-use crate::{AppState, anti_abuse, csrf::CSRF_COOKIE_NAME, error::AppError};
+use crate::{AppState, anti_abuse, csrf::csrf_cookie_name, error::AppError};
 
-pub const SESSION_COOKIE_NAME: &str = "ck_session";
+pub const DEFAULT_SESSION_COOKIE_NAME: &str = "ck_session";
 const SESSION_DURATION_HOURS: i64 = 24 * 30;
 const AUTH_RATE_LIMIT_WINDOW_MINUTES: i64 = 15;
 const LOGIN_RATE_LIMIT_MAX: usize = 10;
@@ -34,6 +34,8 @@ const PASSWORD_RESET_REQUEST_RATE_LIMIT_MAX: usize = 5;
 const PASSWORD_RESET_CONFIRM_RATE_LIMIT_MAX: usize = 10;
 const PASSWORD_RESET_DURATION_HOURS: i64 = 1;
 const TURNSTILE_SITEVERIFY_URL: &str = "https://challenges.cloudflare.com/turnstile/v0/siteverify";
+const SESSION_COOKIE_NAME_ENV: &str = "CK_SESSION_COOKIE_NAME";
+const COOKIE_PATH_ENV: &str = "CK_COOKIE_PATH";
 const DEV_AUTH_TOKEN_ENV: &str = "CK_EXPOSE_DEV_AUTH_TOKENS";
 const LEGACY_DEV_EMAIL_TOKEN_ENV: &str = "CK_EXPOSE_DEV_EMAIL_TOKENS";
 #[cfg(debug_assertions)]
@@ -270,7 +272,8 @@ impl FromRequestParts<Arc<AppState>> for AuthUser {
             .and_then(|v| v.to_str().ok())
             .ok_or_else(|| AppError::Unauthorized("Not authenticated.".to_string()))?;
 
-        let session_token = extract_cookie_value(cookie_header, SESSION_COOKIE_NAME)
+        let session_cookie_name = session_cookie_name();
+        let session_token = extract_cookie_value(cookie_header, &session_cookie_name)
             .ok_or_else(|| AppError::Unauthorized("Not authenticated.".to_string()))?;
 
         let row = sqlx::query(
@@ -1143,8 +1146,9 @@ async fn create_password_reset_token(db: &sqlx::PgPool, user_id: Uuid) -> Result
 
 fn build_session_cookie(token: &str) -> Result<String, AppError> {
     Ok(format!(
-        "{name}={token}; HttpOnly; Path=/; Max-Age={max_age}; SameSite=Lax{secure}",
-        name = SESSION_COOKIE_NAME,
+        "{name}={token}; HttpOnly; Path={path}; Max-Age={max_age}; SameSite=Lax{secure}",
+        name = session_cookie_name(),
+        path = session_cookie_path(),
         max_age = SESSION_DURATION_HOURS * 60 * 60,
         secure = session_cookie_secure_suffix()
     ))
@@ -1152,8 +1156,9 @@ fn build_session_cookie(token: &str) -> Result<String, AppError> {
 
 fn build_csrf_cookie(token: &str) -> Result<String, AppError> {
     Ok(format!(
-        "{name}={token}; Path=/; Max-Age={max_age}; SameSite=Lax{secure}",
-        name = CSRF_COOKIE_NAME,
+        "{name}={token}; Path={path}; Max-Age={max_age}; SameSite=Lax{secure}",
+        name = csrf_cookie_name(),
+        path = session_cookie_path(),
         max_age = SESSION_DURATION_HOURS * 60 * 60,
         secure = session_cookie_secure_suffix()
     ))
@@ -1180,18 +1185,60 @@ fn build_session_response_headers(
 
 fn clear_session_cookie() -> Result<String, AppError> {
     Ok(format!(
-        "{name}=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax{secure}",
-        name = SESSION_COOKIE_NAME,
+        "{name}=; HttpOnly; Path={path}; Max-Age=0; SameSite=Lax{secure}",
+        name = session_cookie_name(),
+        path = session_cookie_path(),
         secure = session_cookie_secure_suffix()
     ))
 }
 
 fn clear_csrf_cookie() -> Result<String, AppError> {
     Ok(format!(
-        "{name}=; Path=/; Max-Age=0; SameSite=Lax{secure}",
-        name = CSRF_COOKIE_NAME,
+        "{name}=; Path={path}; Max-Age=0; SameSite=Lax{secure}",
+        name = csrf_cookie_name(),
+        path = session_cookie_path(),
         secure = session_cookie_secure_suffix()
     ))
+}
+
+pub fn session_cookie_name() -> String {
+    configured_cookie_name(SESSION_COOKIE_NAME_ENV, DEFAULT_SESSION_COOKIE_NAME)
+}
+
+fn session_cookie_path() -> String {
+    let path = env::var(COOKIE_PATH_ENV)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "/".to_string());
+
+    if path.starts_with('/')
+        && !path.contains(';')
+        && !path.contains(',')
+        && !path.contains('\r')
+        && !path.contains('\n')
+    {
+        path
+    } else {
+        "/".to_string()
+    }
+}
+
+pub(crate) fn configured_cookie_name(env_key: &str, default_value: &str) -> String {
+    let candidate = env::var(env_key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| default_value.to_string());
+
+    if candidate
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+    {
+        candidate
+    } else {
+        default_value.to_string()
+    }
 }
 
 fn session_cookie_secure_suffix() -> &'static str {

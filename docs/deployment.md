@@ -83,11 +83,13 @@ API:
 - `MAIL_FROM_EMAIL=no-reply@worldkeystone.com`
 - `MAIL_RESEND_API_KEY`
 - `CF_TURNSTILE_SECRET_KEY`
+- `CK_SESSION_COOKIE_NAME`, `CK_CSRF_COOKIE_NAME`, and `CK_COOKIE_PATH` when multiple locale instances share one public hostname under different paths
 
 Web build:
 
 - `VITE_API_BASE_URL=/api`
 - `VITE_TURNSTILE_SITE_KEY`
+- `VITE_CSRF_COOKIE_NAME` when the API uses a non-default `CK_CSRF_COOKIE_NAME`
 - `VITE_PATREON_URL`
 
 If the API is exposed on more than one allowed web origin, use `CORS_ALLOWED_ORIGINS` instead of `WEB_ORIGIN`.

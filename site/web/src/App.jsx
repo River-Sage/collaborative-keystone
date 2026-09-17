@@ -144,6 +144,7 @@ const CONFIGURED_PATREON_URL = (import.meta.env.VITE_PATREON_URL || "").trim();
 const CONFIGURED_PATREON_LABEL = (
   import.meta.env.VITE_PATREON_LABEL || ""
 ).trim();
+const APP_BASE_PATH = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
 const TURNSTILE_SCRIPT_ID = "ck-turnstile-script";
 
 const VOTE_OPTIONS = [
@@ -483,11 +484,28 @@ function turnstileStatusMessage(status) {
   return "";
 }
 
+function normalizedAppPath(pathname) {
+  const normalized = pathname.replace(/\/$/, "");
+  return normalized || "/";
+}
+
+function routeMatches(pathname, route) {
+  const path = normalizedAppPath(pathname);
+  const normalizedRoute = normalizedAppPath(route);
+  return (
+    path === normalizedRoute ||
+    (APP_BASE_PATH ? path === `${APP_BASE_PATH}${normalizedRoute}` : false)
+  );
+}
+
+function appHomePath() {
+  return APP_BASE_PATH ? `${APP_BASE_PATH}/` : "/";
+}
+
 function getEmailVerificationLinkToken() {
   try {
     const url = new URL(window.location.href);
-    const path = url.pathname.replace(/\/$/, "");
-    if (path !== "/verify-email") return "";
+    if (!routeMatches(url.pathname, "/verify-email")) return "";
 
     const hashToken = new URLSearchParams(url.hash.replace(/^#/, "")).get("token");
     return (hashToken || url.searchParams.get("token") || "").trim();
@@ -499,9 +517,9 @@ function getEmailVerificationLinkToken() {
 function clearEmailVerificationLinkUrl() {
   try {
     const url = new URL(window.location.href);
-    if (url.pathname.replace(/\/$/, "") !== "/verify-email") return;
+    if (!routeMatches(url.pathname, "/verify-email")) return;
 
-    window.history.replaceState({}, document.title, "/");
+    window.history.replaceState({}, document.title, appHomePath());
   } catch {
     // History can be unavailable in restricted browser modes.
   }
@@ -510,8 +528,7 @@ function clearEmailVerificationLinkUrl() {
 function getPasswordResetLinkToken() {
   try {
     const url = new URL(window.location.href);
-    const path = url.pathname.replace(/\/$/, "");
-    if (path !== "/reset-password") return "";
+    if (!routeMatches(url.pathname, "/reset-password")) return "";
 
     const hashToken = new URLSearchParams(url.hash.replace(/^#/, "")).get("token");
     return (hashToken || url.searchParams.get("token") || "").trim();
@@ -523,9 +540,9 @@ function getPasswordResetLinkToken() {
 function clearPasswordResetLinkUrl() {
   try {
     const url = new URL(window.location.href);
-    if (url.pathname.replace(/\/$/, "") !== "/reset-password") return;
+    if (!routeMatches(url.pathname, "/reset-password")) return;
 
-    window.history.replaceState({}, document.title, "/");
+    window.history.replaceState({}, document.title, appHomePath());
   } catch {
     // History can be unavailable in restricted browser modes.
   }
@@ -756,7 +773,7 @@ function App() {
       return;
     }
 
-    if (window.location.pathname.replace(/\/$/, "") === "/reset-password") {
+    if (routeMatches(window.location.pathname, "/reset-password")) {
       clearPasswordResetLinkUrl();
       setMe(null);
       setAuthMode("resetRequest");
