@@ -231,11 +231,10 @@ Example production layout:
 
 If a new public hostname is not available yet, an early locale can also be proxied through the World hostname at a path such as `https://worldkeystone.com/locales/castle-rock/`.
 
-For a World-operated path-hosted locale that should share login with World Keystone, use the same database, same session secret, same cookie names, and root cookie path:
+For a World-operated path-hosted locale that should share login with World Keystone, use the same database, same cookie names, and root cookie path:
 
 ```bash
 DATABASE_URL=postgres://.../collaborative_keystone_prod
-SESSION_SECRET=<same secret used by World Keystone>
 CK_SESSION_COOKIE_NAME=ck_session
 CK_CSRF_COOKIE_NAME=ck_csrf
 CK_COOKIE_PATH=/

@@ -168,7 +168,7 @@ Current v1 implementation:
 
 ### 4.5 Cross-locale accounts and sign-in
 
-World-operated locales should support one account and one sign-in session across those locales when they share the same operator, hostname trust boundary, runtime secret owner, and identity/session store. In that mode, user accounts, email verification, password reset state, sessions, and CSRF cookies are shared, while civic records remain scoped by locale through `locale_id`.
+World-operated locales should support one account and one sign-in session across those locales when they share the same operator, hostname trust boundary, and identity/session store. In that mode, user accounts, email verification, password reset state, server-side sessions, session cookies, and CSRF cookies are shared, while civic records remain scoped by locale through `locale_id`.
 
 Independent locale operators should not share raw production databases with World Keystone or with each other. For independent operators, the secure target is a central sign-in or federation flow operated by World Keystone, such as a future OAuth/OIDC-style account provider. Until that exists, independently operated locales may require separate accounts.
 

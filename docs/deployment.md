@@ -148,7 +148,7 @@ Path-hosted locale origins should be listed with a trailing slash, for example `
 
 Direct locale origins may still exist for hosting, operations, and deep links, but a locale deployment should be considered trusted only through the global registry path.
 
-World-operated locales may share the canonical identity/session store so one login works across those locales. That mode should share user accounts, email verification, password reset state, sessions, session secrets, cookie names, and CSRF cookies while keeping civic data scoped by configured locale. Independent operators should use separate databases until a formal World Keystone sign-in federation flow exists; they should not be given raw shared database access.
+World-operated locales may share the canonical identity/session store so one login works across those locales. That mode should share user accounts, email verification, password reset state, server-side sessions, session cookie names, cookie path, and CSRF cookies while keeping civic data scoped by configured locale. Independent operators should use separate databases until a formal World Keystone sign-in federation flow exists; they should not be given raw shared database access.
 
 Community deployments must clearly distinguish themselves from the canonical official instance unless they are explicitly authorized to present as official.
 
