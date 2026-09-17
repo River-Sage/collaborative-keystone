@@ -7,6 +7,9 @@ param(
     [string]$ExpectedLocaleSlug = $env:CK_EXPECTED_LOCALE_SLUG,
     [string]$ExpectedLocaleName = $env:CK_EXPECTED_LOCALE_NAME,
     [string]$ExpectedRegistryStatus = $env:CK_EXPECTED_REGISTRY_STATUS,
+    [string]$CorsOrigin = $env:CK_SMOKE_CORS_ORIGIN,
+    [string]$SessionCookieName = $env:CK_SMOKE_SESSION_COOKIE_NAME,
+    [string]$CsrfCookieName = $env:CK_SMOKE_CSRF_COOKIE_NAME,
     [switch]$SkipLogin,
     [switch]$SkipOversizedBody
 )
@@ -58,6 +61,28 @@ function Normalize-Origin {
 
     $Value = $Value.Trim().TrimEnd("/")
     Assert-Smoke ($Value.StartsWith("https://") -or $Value.StartsWith("http://localhost") -or $Value.StartsWith("http://127.0.0.1")) "$Name must be an origin such as https://example.com."
+
+    return $Value
+}
+
+function Normalize-WebUrl {
+    param(
+        [string]$Value,
+        [string]$Name,
+        [string]$DefaultValue
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        $Value = $DefaultValue
+    }
+
+    $Value = $Value.Trim()
+    Assert-Smoke ($Value.StartsWith("https://") -or $Value.StartsWith("http://localhost") -or $Value.StartsWith("http://127.0.0.1")) "$Name must be a URL such as https://example.com or https://example.com/path/."
+
+    $uri = [Uri]$Value
+    if ($uri.AbsolutePath -ne "/" -and -not $Value.EndsWith("/")) {
+        $Value = "$Value/"
+    }
 
     return $Value
 }
@@ -146,12 +171,25 @@ function Get-SmokeStatusCode {
 }
 
 $ApiOrigin = Normalize-Origin $ApiOrigin "ApiOrigin" "https://api.collaborativekeystone.com"
-$WebOrigin = Normalize-Origin $WebOrigin "WebOrigin" "https://collaborativekeystone.com"
+$WebOrigin = Normalize-WebUrl $WebOrigin "WebOrigin" "https://collaborativekeystone.com"
 $ApiUri = [Uri]$ApiOrigin
+$WebUri = [Uri]$WebOrigin
+if ([string]::IsNullOrWhiteSpace($CorsOrigin)) {
+    $CorsOrigin = "$($WebUri.Scheme)://$($WebUri.Authority)"
+} else {
+    $CorsOrigin = Normalize-Origin $CorsOrigin "CorsOrigin" "https://collaborativekeystone.com"
+}
+if ([string]::IsNullOrWhiteSpace($SessionCookieName)) {
+    $SessionCookieName = "ck_session"
+}
+if ([string]::IsNullOrWhiteSpace($CsrfCookieName)) {
+    $CsrfCookieName = "ck_csrf"
+}
 
 Write-Host "Collaborative Keystone production smoke" -ForegroundColor White
-Write-Info "Web origin: $WebOrigin"
+Write-Info "Web URL: $WebOrigin"
 Write-Info "API origin: $ApiOrigin"
+Write-Info "CORS origin: $CorsOrigin"
 
 Write-Step "Web origin responds"
 $webResponse = Invoke-SmokeRequest -Uri $WebOrigin
@@ -203,23 +241,23 @@ Write-Pass "Source, provenance, and registry metadata returned expected public f
 
 Write-Step "CORS preflight allows the configured web origin"
 $preflightHeaders = @{
-    Origin = $WebOrigin
+    Origin = $CorsOrigin
     "Access-Control-Request-Method" = "POST"
     "Access-Control-Request-Headers" = "content-type,x-csrf-token"
 }
 $preflightResponse = Invoke-SmokeRequest -Uri "$ApiOrigin/auth/login" -Method "OPTIONS" -Headers $preflightHeaders
 $allowOrigin = Get-FirstHeaderValue $preflightResponse.Headers "Access-Control-Allow-Origin"
 $allowCredentials = Get-FirstHeaderValue $preflightResponse.Headers "Access-Control-Allow-Credentials"
-Assert-Smoke ($allowOrigin -eq $WebOrigin) "CORS allowed origin should be '$WebOrigin' but was '$allowOrigin'."
+Assert-Smoke ($allowOrigin -eq $CorsOrigin) "CORS allowed origin should be '$CorsOrigin' but was '$allowOrigin'."
 Assert-Smoke ($allowCredentials.ToLowerInvariant() -eq "true") "CORS must allow credentials for cookie auth."
-Write-Pass "CORS preflight allows credentials for $WebOrigin."
+Write-Pass "CORS preflight allows credentials for $CorsOrigin."
 
 if (-not $SkipOversizedBody) {
     Write-Step "Oversized request bodies are rejected"
     $bigPassword = "x" * (1024 * 1024 + 2048)
     $oversizedEmail = "oversized-smoke-$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())@example.com"
     $oversizedBody = @{ email = $oversizedEmail; password = $bigPassword } | ConvertTo-Json -Compress
-    $oversizedStatus = Get-SmokeStatusCode -Uri "$ApiOrigin/auth/login" -Method "POST" -Headers @{ Origin = $WebOrigin } -Body $oversizedBody
+    $oversizedStatus = Get-SmokeStatusCode -Uri "$ApiOrigin/auth/login" -Method "POST" -Headers @{ Origin = $CorsOrigin } -Body $oversizedBody
     Assert-Smoke ($oversizedStatus -eq 413) "Oversized login request should return 413, but returned HTTP $oversizedStatus."
     Write-Pass "Oversized JSON request returned 413."
 }
@@ -232,32 +270,32 @@ if ($SkipLogin) {
     Write-Step "Login sets secure session and CSRF cookies"
     $session = New-Object Microsoft.PowerShell.Commands.WebRequestSession
     $loginBody = @{ email = $Email; password = $Password } | ConvertTo-Json -Compress
-    $loginResponse = Invoke-SmokeRequest -Uri "$ApiOrigin/auth/login" -Method "POST" -Headers @{ Origin = $WebOrigin } -Body $loginBody -WebSession $session
+    $loginResponse = Invoke-SmokeRequest -Uri "$ApiOrigin/auth/login" -Method "POST" -Headers @{ Origin = $CorsOrigin } -Body $loginBody -WebSession $session
     Assert-Smoke ($loginResponse.StatusCode -eq 200) "Login returned HTTP $($loginResponse.StatusCode)."
 
     $setCookies = Get-HeaderValues $loginResponse.Headers "Set-Cookie"
-    $sessionCookieHeader = $setCookies | Where-Object { $_ -like "ck_session=*" } | Select-Object -First 1
-    $csrfCookieHeader = $setCookies | Where-Object { $_ -like "ck_csrf=*" } | Select-Object -First 1
+    $sessionCookieHeader = $setCookies | Where-Object { $_ -like "$SessionCookieName=*" } | Select-Object -First 1
+    $csrfCookieHeader = $setCookies | Where-Object { $_ -like "$CsrfCookieName=*" } | Select-Object -First 1
 
-    Assert-Smoke (-not [string]::IsNullOrWhiteSpace($sessionCookieHeader)) "Login did not set ck_session."
-    Assert-Smoke (-not [string]::IsNullOrWhiteSpace($csrfCookieHeader)) "Login did not set ck_csrf."
-    Assert-Smoke ($sessionCookieHeader -match "(?i);\s*Secure") "ck_session must include Secure in production."
-    Assert-Smoke ($sessionCookieHeader -match "(?i);\s*HttpOnly") "ck_session must include HttpOnly."
-    Assert-Smoke ($sessionCookieHeader -match "(?i);\s*SameSite=Lax") "ck_session must include SameSite=Lax."
-    Assert-Smoke ($csrfCookieHeader -match "(?i);\s*Secure") "ck_csrf must include Secure in production."
-    Assert-Smoke ($csrfCookieHeader -notmatch "(?i);\s*HttpOnly") "ck_csrf must remain readable by the frontend."
+    Assert-Smoke (-not [string]::IsNullOrWhiteSpace($sessionCookieHeader)) "Login did not set $SessionCookieName."
+    Assert-Smoke (-not [string]::IsNullOrWhiteSpace($csrfCookieHeader)) "Login did not set $CsrfCookieName."
+    Assert-Smoke ($sessionCookieHeader -match "(?i);\s*Secure") "$SessionCookieName must include Secure in production."
+    Assert-Smoke ($sessionCookieHeader -match "(?i);\s*HttpOnly") "$SessionCookieName must include HttpOnly."
+    Assert-Smoke ($sessionCookieHeader -match "(?i);\s*SameSite=Lax") "$SessionCookieName must include SameSite=Lax."
+    Assert-Smoke ($csrfCookieHeader -match "(?i);\s*Secure") "$CsrfCookieName must include Secure in production."
+    Assert-Smoke ($csrfCookieHeader -notmatch "(?i);\s*HttpOnly") "$CsrfCookieName must remain readable by the frontend."
     Write-Pass "Login cookies include the expected production attributes."
 
     Write-Step "Authenticated request succeeds"
-    $meResponse = Invoke-SmokeRequest -Uri "$ApiOrigin/auth/me" -Headers @{ Origin = $WebOrigin } -WebSession $session
+    $meResponse = Invoke-SmokeRequest -Uri "$ApiOrigin/auth/me" -Headers @{ Origin = $CorsOrigin } -WebSession $session
     Assert-Smoke ($meResponse.StatusCode -eq 200) "Authenticated /auth/me returned HTTP $($meResponse.StatusCode)."
     Write-Pass "/auth/me returned 200 with the smoke session."
 
     Write-Step "CSRF-protected logout succeeds"
-    $csrfCookie = $session.Cookies.GetCookies($ApiUri) | Where-Object { $_.Name -eq "ck_csrf" } | Select-Object -First 1
-    Assert-Smoke ($null -ne $csrfCookie -and -not [string]::IsNullOrWhiteSpace($csrfCookie.Value)) "Could not read ck_csrf from the smoke session."
+    $csrfCookie = $session.Cookies.GetCookies($ApiUri) | Where-Object { $_.Name -eq $CsrfCookieName } | Select-Object -First 1
+    Assert-Smoke ($null -ne $csrfCookie -and -not [string]::IsNullOrWhiteSpace($csrfCookie.Value)) "Could not read $CsrfCookieName from the smoke session."
     $logoutHeaders = @{
-        Origin = $WebOrigin
+        Origin = $CorsOrigin
         "X-CSRF-Token" = $csrfCookie.Value
     }
     $logoutResponse = Invoke-SmokeRequest -Uri "$ApiOrigin/auth/logout" -Method "POST" -Headers $logoutHeaders -Body "{}" -WebSession $session
