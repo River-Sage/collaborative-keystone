@@ -123,11 +123,19 @@ The configured locale identity must flow into the user-facing product automatica
 
 The web build should set `VITE_LOCALE_NAME` to the same display name as `CK_LOCALE_NAME` so the first loading frame and browser title are localized before public API metadata returns.
 
+Locale identity must include a stable duplicate-prevention key. Use `scripts/New-CkLocaleIdentity.ps1` to generate a canonical key, display qualifier, environment fields, and starter registry JSON. The World registry should reject duplicate active entries with the same canonical key, while allowing the same display name in different jurisdictions when each entry has a different canonical key and clear qualifier.
+
 Current locale identity variables:
 
 - `CK_LOCALE_SLUG`
 - `CK_LOCALE_NAME`
 - `CK_LOCALE_TYPE`
+- `CK_LOCALE_CANONICAL_KEY`
+- `CK_LOCALE_DISPLAY_QUALIFIER`
+- `CK_LOCALE_COUNTRY_CODE`
+- `CK_LOCALE_REGION_CODE`
+- `CK_LOCALE_REGION_NAME`
+- `CK_LOCALE_PARENT_SLUG`
 - `PUBLIC_WEB_ORIGIN`
 - `PUBLIC_API_ORIGIN`
 - `CK_GLOBAL_REGISTRY_ORIGIN`
@@ -147,6 +155,8 @@ The current global site can expose configured registry entries through `CK_LOCAL
 The web UI should expose active registry entries through a public **Locales** dropdown on the login/home surface. Public directory entries should be limited to active trusted statuses such as `canonical`, `official`, `authorized`, and `verified`. Warning, suspended, compromised, abandoned, community, unverified, and development entries may remain visible in technical registry JSON, but should not be promoted as active public destinations.
 
 Path-hosted locale origins should be listed with a trailing slash, for example `https://worldkeystone.com/locales/castle-rock/`. The web UI should also normalize active directory links to that shape so a user does not hit internal-origin redirects such as local nginx ports.
+
+When two locales share a display name, the Locales dropdown and search surfaces should show a qualifier, for example `Castle Rock Keystone` with `Colorado, US` underneath. The app heading may remain the simple brand name.
 
 Direct locale origins may still exist for hosting, operations, and deep links, but a locale deployment should be considered trusted only through the global registry path.
 

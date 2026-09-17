@@ -1,4 +1,4 @@
-use std::{env, sync::Arc};
+use std::{collections::HashSet, env, sync::Arc};
 
 use axum::{Json, extract::State};
 use serde::{Deserialize, Serialize};
@@ -103,6 +103,18 @@ pub struct LocaleInfo {
     pub name: String,
     #[serde(alias = "type")]
     pub locale_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub canonical_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_qualifier: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub country_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub region_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub region_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_locale_slug: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -308,6 +320,12 @@ async fn load_locale_info(state: &AppState) -> LocaleInfo {
         slug: state.locale.slug.clone(),
         name: state.locale.name.clone(),
         locale_type: state.locale.locale_type.clone(),
+        canonical_key: Some(state.locale.canonical_key.clone()),
+        display_qualifier: state.locale.display_qualifier.clone(),
+        country_code: state.locale.country_code.clone(),
+        region_code: state.locale.region_code.clone(),
+        region_name: state.locale.region_name.clone(),
+        parent_locale_slug: state.locale.parent_locale_slug.clone(),
     }
 }
 
@@ -333,48 +351,82 @@ fn registry_entries_from_json(
     let configs: Vec<LocaleRegistryEntryConfig> =
         serde_json::from_str(raw_entries).map_err(|err| err.to_string())?;
 
-    Ok(configs
-        .into_iter()
-        .map(|config| {
-            let registry_status = normalize_code(
-                config.registry_status.as_deref().unwrap_or("unverified"),
-                "unverified",
-                REGISTRY_STATUS_CODES,
-            );
-            let trust_tier = normalize_code(
-                config.trust_tier.as_deref().unwrap_or("unsigned"),
-                "unsigned",
-                TRUST_TIER_CODES,
-            );
-            let source_repository_url = config
-                .source_repository_url
-                .filter(|value| !value.trim().is_empty())
-                .unwrap_or_else(|| default_source_repository_url.to_string());
-            let provenance_manifest_path = config
-                .provenance_manifest_path
-                .filter(|value| !value.trim().is_empty())
-                .unwrap_or_else(|| "/.well-known/keystone-build.json".to_string());
+    let mut seen_slugs = HashSet::new();
+    let mut seen_canonical_keys = HashSet::new();
+    let mut entries = Vec::with_capacity(configs.len());
 
-            LocaleRegistryEntry {
-                locale: config.locale,
-                web_origin: config.web_origin,
-                api_origin: config.api_origin,
-                operator: config.operator.unwrap_or(OperatorInfo {
-                    name: None,
-                    contact: None,
-                }),
-                official_branding_allowed: official_branding_allowed(&registry_status),
-                brand_claim: brand_claim(&registry_status),
-                registry_status,
-                trust_tier,
-                release_id: config.release_id,
-                source_repository_url,
-                provenance_manifest_path,
-                instance_public_key: config.instance_public_key,
-                last_verified_at: config.last_verified_at,
-            }
-        })
-        .collect())
+    for config in configs {
+        let mut locale = config.locale;
+        let locale_slug = locale.slug.trim().to_ascii_lowercase();
+        if locale_slug.is_empty() {
+            return Err("locale.slug must not be empty.".to_string());
+        }
+        if !seen_slugs.insert(locale_slug.clone()) {
+            return Err(format!(
+                "duplicate locale slug in registry config: {locale_slug}"
+            ));
+        }
+
+        let canonical_key = locale
+            .canonical_key
+            .clone()
+            .unwrap_or_else(|| locale_slug.clone())
+            .trim()
+            .to_ascii_lowercase();
+        if canonical_key.is_empty() {
+            return Err(format!(
+                "locale.canonical_key must not be empty for registry entry {locale_slug}."
+            ));
+        }
+        if !seen_canonical_keys.insert(canonical_key.clone()) {
+            return Err(format!(
+                "duplicate locale canonical_key in registry config: {canonical_key}"
+            ));
+        }
+        if locale.canonical_key.is_none() {
+            locale.canonical_key = Some(canonical_key);
+        }
+
+        let registry_status = normalize_code(
+            config.registry_status.as_deref().unwrap_or("unverified"),
+            "unverified",
+            REGISTRY_STATUS_CODES,
+        );
+        let trust_tier = normalize_code(
+            config.trust_tier.as_deref().unwrap_or("unsigned"),
+            "unsigned",
+            TRUST_TIER_CODES,
+        );
+        let source_repository_url = config
+            .source_repository_url
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| default_source_repository_url.to_string());
+        let provenance_manifest_path = config
+            .provenance_manifest_path
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "/.well-known/keystone-build.json".to_string());
+
+        entries.push(LocaleRegistryEntry {
+            locale,
+            web_origin: config.web_origin,
+            api_origin: config.api_origin,
+            operator: config.operator.unwrap_or(OperatorInfo {
+                name: None,
+                contact: None,
+            }),
+            official_branding_allowed: official_branding_allowed(&registry_status),
+            brand_claim: brand_claim(&registry_status),
+            registry_status,
+            trust_tier,
+            release_id: config.release_id,
+            source_repository_url,
+            provenance_manifest_path,
+            instance_public_key: config.instance_public_key,
+            last_verified_at: config.last_verified_at,
+        });
+    }
+
+    Ok(entries)
 }
 
 fn source_repository_url() -> (String, bool) {
@@ -579,6 +631,30 @@ mod tests {
     #[test]
     fn registry_entries_from_json_rejects_malformed_json() {
         assert!(registry_entries_from_json("not json", "https://example.test/source").is_err());
+    }
+
+    #[test]
+    fn registry_entries_from_json_rejects_duplicate_canonical_keys() {
+        let result = registry_entries_from_json(
+            r#"[{
+                "locale": {
+                    "slug": "castle-rock-co",
+                    "name": "Castle Rock",
+                    "locale_type": "municipality",
+                    "canonical_key": "us-co-douglas-county-castle-rock"
+                }
+            }, {
+                "locale": {
+                    "slug": "castle-rock-colorado-usa",
+                    "name": "Castle Rock",
+                    "locale_type": "municipality",
+                    "canonical_key": "us-co-douglas-county-castle-rock"
+                }
+            }]"#,
+            "https://example.test/source",
+        );
+
+        assert!(result.is_err());
     }
 }
 

@@ -69,6 +69,9 @@ Each registry entry should include:
 - locale slug
 - locale display name
 - locale type
+- canonical locale key
+- display qualifier when the name is ambiguous
+- country, region, and parent locale metadata when applicable
 - public web origin
 - public API origin
 - operator name/contact
@@ -81,6 +84,8 @@ Each registry entry should include:
 - last verified timestamp
 - official branding allowance
 - brand claim
+
+The registry should reject duplicate active entries with the same canonical locale key. Matching display names are allowed only when the canonical keys differ and the directory can clearly disambiguate the entries.
 
 ## Trust Tiers
 

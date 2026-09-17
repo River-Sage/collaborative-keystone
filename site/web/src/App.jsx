@@ -4114,8 +4114,15 @@ function App() {
               target="_blank"
               rel="noreferrer"
             >
-              <strong>{entry.locale.name} Keystone</strong>
-              <span>{formatTrustStatusLabel(entry.registry_status || "unverified")}</span>
+              <span className="locale-directory-entry-main">
+                <strong>{entry.locale.name} Keystone</strong>
+                {entry.locale.display_qualifier ? (
+                  <em>{entry.locale.display_qualifier}</em>
+                ) : null}
+              </span>
+              <span className="locale-directory-entry-status">
+                {formatTrustStatusLabel(entry.registry_status || "unverified")}
+              </span>
             </a>
           ))}
         </div>

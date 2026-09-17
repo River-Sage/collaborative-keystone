@@ -5,6 +5,12 @@ param(
     [string]$LocaleSlug = "world",
     [string]$LocaleName = "World",
     [string]$LocaleType = "world",
+    [string]$LocaleCanonicalKey = "",
+    [string]$LocaleDisplayQualifier = "",
+    [string]$LocaleCountryCode = "",
+    [string]$LocaleRegionCode = "",
+    [string]$LocaleRegionName = "",
+    [string]$LocaleParentSlug = "",
     [int]$Port = 8080,
     [string]$HostName = "127.0.0.1",
     [string]$WebOrigin = "http://localhost:5173",
@@ -34,6 +40,31 @@ $env:WEB_ORIGIN = $WebOrigin
 $env:CK_LOCALE_SLUG = $LocaleSlug
 $env:CK_LOCALE_NAME = $LocaleName
 $env:CK_LOCALE_TYPE = $LocaleType
+
+if ($LocaleCanonicalKey.Trim()) {
+    $env:CK_LOCALE_CANONICAL_KEY = $LocaleCanonicalKey
+}
+
+if ($LocaleDisplayQualifier.Trim()) {
+    $env:CK_LOCALE_DISPLAY_QUALIFIER = $LocaleDisplayQualifier
+}
+
+if ($LocaleCountryCode.Trim()) {
+    $env:CK_LOCALE_COUNTRY_CODE = $LocaleCountryCode
+}
+
+if ($LocaleRegionCode.Trim()) {
+    $env:CK_LOCALE_REGION_CODE = $LocaleRegionCode
+}
+
+if ($LocaleRegionName.Trim()) {
+    $env:CK_LOCALE_REGION_NAME = $LocaleRegionName
+}
+
+if ($LocaleParentSlug.Trim()) {
+    $env:CK_LOCALE_PARENT_SLUG = $LocaleParentSlug
+}
+
 $env:CK_REGISTRY_STATUS = $RegistryStatus
 $env:CK_DEPLOYMENT_KIND = $DeploymentKind
 $env:CK_DEPLOYMENT_STATUS = $DeploymentStatus

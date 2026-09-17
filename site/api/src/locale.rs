@@ -10,6 +10,8 @@ const DEFAULT_LOCALE_TYPE: &str = "world";
 const MAX_LOCALE_SLUG_CHARS: usize = 80;
 const MAX_LOCALE_NAME_CHARS: usize = 120;
 const MAX_LOCALE_TYPE_CHARS: usize = 80;
+const MAX_LOCALE_CODE_CHARS: usize = 80;
+const MAX_LOCALE_QUALIFIER_CHARS: usize = 160;
 
 static CONFIGURED_LOCALE: OnceLock<LocaleConfig> = OnceLock::new();
 
@@ -18,6 +20,12 @@ pub struct LocaleConfig {
     pub slug: String,
     pub name: String,
     pub locale_type: String,
+    pub canonical_key: String,
+    pub display_qualifier: Option<String>,
+    pub country_code: Option<String>,
+    pub region_code: Option<String>,
+    pub region_name: Option<String>,
+    pub parent_locale_slug: Option<String>,
 }
 
 impl LocaleConfig {
@@ -30,11 +38,32 @@ impl LocaleConfig {
         let raw_type =
             env::var("CK_LOCALE_TYPE").unwrap_or_else(|_| DEFAULT_LOCALE_TYPE.to_string());
         let locale_type = normalize_locale_type(&raw_type)?;
+        let canonical_key = env::var("CK_LOCALE_CANONICAL_KEY")
+            .ok()
+            .map(|value| normalize_optional_code("CK_LOCALE_CANONICAL_KEY", &value))
+            .transpose()?
+            .unwrap_or_else(|| slug.clone());
+        let display_qualifier =
+            optional_limited_env("CK_LOCALE_DISPLAY_QUALIFIER", MAX_LOCALE_QUALIFIER_CHARS)?;
+        let country_code = optional_country_code_env("CK_LOCALE_COUNTRY_CODE")?;
+        let region_code = optional_limited_env("CK_LOCALE_REGION_CODE", MAX_LOCALE_CODE_CHARS)?
+            .map(|value| value.to_ascii_uppercase());
+        let region_name = optional_limited_env("CK_LOCALE_REGION_NAME", MAX_LOCALE_NAME_CHARS)?;
+        let parent_locale_slug = env::var("CK_LOCALE_PARENT_SLUG")
+            .ok()
+            .map(|value| normalize_optional_code("CK_LOCALE_PARENT_SLUG", &value))
+            .transpose()?;
 
         Ok(Self {
             slug,
             name,
             locale_type,
+            canonical_key,
+            display_qualifier,
+            country_code,
+            region_code,
+            region_name,
+            parent_locale_slug,
         })
     }
 }
@@ -83,6 +112,12 @@ fn default_locale() -> LocaleConfig {
         slug: DEFAULT_LOCALE_SLUG.to_string(),
         name: DEFAULT_LOCALE_NAME.to_string(),
         locale_type: DEFAULT_LOCALE_TYPE.to_string(),
+        canonical_key: DEFAULT_LOCALE_SLUG.to_string(),
+        display_qualifier: None,
+        country_code: None,
+        region_code: None,
+        region_name: None,
+        parent_locale_slug: None,
     }
 }
 
@@ -152,6 +187,48 @@ fn normalize_locale_slug(value: &str) -> Result<String, String> {
     Ok(normalized)
 }
 
+fn normalize_optional_code(key: &str, value: &str) -> Result<String, String> {
+    let normalized = normalize_code(value);
+    if normalized.is_empty() {
+        return Err(format!("{key} must not be empty when set."));
+    }
+    if normalized.chars().count() > MAX_LOCALE_CODE_CHARS {
+        return Err(format!(
+            "{key} must be {MAX_LOCALE_CODE_CHARS} characters or fewer."
+        ));
+    }
+
+    Ok(normalized)
+}
+
+fn optional_limited_env(key: &str, max_chars: usize) -> Result<Option<String>, String> {
+    let Some(value) = env::var(key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+
+    if value.chars().count() > max_chars {
+        return Err(format!("{key} must be {max_chars} characters or fewer."));
+    }
+
+    Ok(Some(value))
+}
+
+fn optional_country_code_env(key: &str) -> Result<Option<String>, String> {
+    let Some(value) = optional_limited_env(key, 2)? else {
+        return Ok(None);
+    };
+    let normalized = value.to_ascii_uppercase();
+    if normalized.len() == 2 && normalized.chars().all(|ch| ch.is_ascii_alphabetic()) {
+        Ok(Some(normalized))
+    } else {
+        Err(format!("{key} must be an ISO 3166-1 alpha-2 country code."))
+    }
+}
+
 fn normalize_code(value: &str) -> String {
     let mut output = String::new();
     let mut previous_was_dash = false;
@@ -183,7 +260,9 @@ fn normalize_code(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{default_name_for_slug, normalize_locale_slug, normalize_locale_type};
+    use super::{
+        LocaleConfig, default_name_for_slug, normalize_locale_slug, normalize_locale_type,
+    };
 
     #[test]
     fn locale_slug_normalizes_for_operator_input() {
@@ -214,5 +293,22 @@ mod tests {
     fn display_name_can_be_derived_from_slug() {
         assert_eq!(default_name_for_slug("castle-rock"), "Castle Rock");
         assert_eq!(default_name_for_slug("world"), "World");
+    }
+
+    #[test]
+    fn locale_config_defaults_canonical_key_to_slug() {
+        let config = LocaleConfig {
+            slug: "castle-rock".to_string(),
+            name: "Castle Rock".to_string(),
+            locale_type: "municipality".to_string(),
+            canonical_key: "castle-rock".to_string(),
+            display_qualifier: None,
+            country_code: None,
+            region_code: None,
+            region_name: None,
+            parent_locale_slug: None,
+        };
+
+        assert_eq!(config.canonical_key, "castle-rock");
     }
 }

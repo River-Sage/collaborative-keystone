@@ -5,9 +5,27 @@ Keystone is intended to run one configured locale per deployment.
 Examples:
 
 - `World Keystone` is the canonical global entry point and locale registry.
-- `Castle Rock Keystone` is a separate locale instance with its own database, domains, moderator bootstrap, audit trail, cycle history, and implementation records.
+- `Castle Rock Keystone` is a locale instance with its own locale identity, cycle history, audit trail, moderator bootstrap record, and implementation records.
 
 Users should discover locale instances through World Keystone. Direct locale URLs may exist, but the trusted path is the World registry.
+
+For the identity and duplicate-prevention model, start with `docs/locale-identity-and-registry.md`.
+
+## Fast Path
+
+1. Generate locale identity with `scripts/New-CkLocaleIdentity.ps1`.
+2. Check the World registry for the generated `canonical_key`.
+3. Choose hosting:
+   - World-operated path: `https://worldkeystone.com/locales/{slug}/`
+   - World subdomain: `https://{slug}.worldkeystone.com`
+   - independent public origin
+4. Configure API env from the generated locale identity.
+5. Configure web env with `VITE_LOCALE_NAME`, `VITE_API_BASE_URL`, and optional `VITE_BASE_PATH`.
+6. Start the API and web build.
+7. Bootstrap the first moderator.
+8. Run the metadata smoke check.
+9. Add the locale to the World registry.
+10. Confirm it appears in the World `Locales` dropdown.
 
 ## What Can Be Verified
 
@@ -25,6 +43,11 @@ Every locale API should set:
 $env:CK_LOCALE_SLUG = "castle-rock"
 $env:CK_LOCALE_NAME = "Castle Rock"
 $env:CK_LOCALE_TYPE = "municipality"
+$env:CK_LOCALE_CANONICAL_KEY = "us-co-douglas-county-castle-rock"
+$env:CK_LOCALE_DISPLAY_QUALIFIER = "Colorado, US"
+$env:CK_LOCALE_COUNTRY_CODE = "US"
+$env:CK_LOCALE_REGION_CODE = "CO"
+$env:CK_LOCALE_REGION_NAME = "Colorado"
 $env:PUBLIC_WEB_ORIGIN = "https://castle-rock.example.org"
 $env:PUBLIC_API_ORIGIN = "https://api.castle-rock.example.org"
 $env:CK_GLOBAL_REGISTRY_ORIGIN = "https://collaborativekeystone.com"
@@ -34,6 +57,20 @@ $env:CK_REGISTRY_STATUS = "authorized"
 The API upserts the configured locale on startup and opens that locale's active UTC calendar-month cycle if none exists.
 
 Registry JSON should use `locale_type` for locale entries. The API also accepts `type` as a convenience alias for operator-written config.
+
+Generate a starter identity:
+
+```powershell
+.\scripts\New-CkLocaleIdentity.ps1 `
+  -LocaleName "Castle Rock" `
+  -LocaleType "municipality" `
+  -CountryCode "US" `
+  -RegionCode "CO" `
+  -RegionName "Colorado" `
+  -ParentName "Douglas County"
+```
+
+Use the generated `canonical_key` to check for duplicate registry entries before creating the locale.
 
 ## Local Two-Locale Dev Run
 
@@ -54,7 +91,12 @@ $castleRockEntry = @'
   "locale": {
     "slug": "castle-rock",
     "name": "Castle Rock",
-    "locale_type": "municipality"
+    "locale_type": "municipality",
+    "canonical_key": "us-co-douglas-county-castle-rock",
+    "display_qualifier": "Colorado, US",
+    "country_code": "US",
+    "region_code": "CO",
+    "region_name": "Colorado"
   },
   "web_origin": "http://localhost:5174",
   "api_origin": "http://localhost:8081",
@@ -105,6 +147,11 @@ cd C:\Dev\Sites\collaborative-keystone\collaborative-keystone
   -LocaleSlug "castle-rock" `
   -LocaleName "Castle Rock" `
   -LocaleType "municipality" `
+  -LocaleCanonicalKey "us-co-douglas-county-castle-rock" `
+  -LocaleDisplayQualifier "Colorado, US" `
+  -LocaleCountryCode "US" `
+  -LocaleRegionCode "CO" `
+  -LocaleRegionName "Colorado" `
   -Port 8081 `
   -WebOrigin "http://localhost:5174" `
   -ApiOrigin "http://localhost:8081" `
@@ -119,7 +166,10 @@ Start Castle Rock web:
 
 ```powershell
 cd C:\Dev\Sites\collaborative-keystone\collaborative-keystone
-.\scripts\Start-CkLocaleWeb.ps1 -ApiBaseUrl "http://localhost:8081" -Port 5174
+.\scripts\Start-CkLocaleWeb.ps1 `
+  -ApiBaseUrl "http://localhost:8081" `
+  -LocaleName "Castle Rock" `
+  -Port 5174
 ```
 
 World should expose Castle Rock from:
@@ -197,7 +247,9 @@ Check Castle Rock:
 
 Before a locale is listed as `authorized`, `official`, or `verified`, it should have:
 
-- a separate production database
+- a production database plan: shared World identity/session database for World-operated SSO, or an isolated database for independent operators
+- a unique `canonical_key` in the World registry
+- a visible `display_qualifier` when the display name can be confused with another place
 - production `https://` web and API origins
 - `APP_ENV=production`
 - development helper env vars disabled

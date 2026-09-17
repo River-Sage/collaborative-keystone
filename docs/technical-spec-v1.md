@@ -124,12 +124,20 @@ A localized deployment should be able to define at minimum:
 
 * locale slug
 * locale display name
+* canonical locale key
+* display qualifier for disambiguation
+* locale type
+* country / region / parent locale fields when applicable
 * public web origin
 * public API origin
 * contact / operator identity
 * whether the deployment is official, authorized, or community-operated
 
 The default v1 deployment remains the World locale, but locale configuration must not be hardcoded so deeply that a county, city, state, country, or other community cannot reasonably launch its own instance later.
+
+Locale creation should not be artificially limited to a short list of civic categories. A locale can represent a city, county, state, country, region, neighborhood, campus, organization, or other clearly defined community scope. The registry requirement is uniqueness and clarity: one canonical key per real scope, clear display qualification where names collide, and accurate official/community status.
+
+The canonical locale key is the duplicate-prevention identity. `Castle Rock`, `Castle Rock, CO`, and `Castle Rock, Colorado, USA` should normalize to the same canonical key when they refer to the same place. A different Castle Rock in a different jurisdiction should be allowed, but it must have a different canonical key and a visible qualifier in directory/search surfaces.
 
 ### 4.4 Global locale access point
 
@@ -148,6 +156,9 @@ The global locale registry should eventually include:
 * locale slug
 * locale display name
 * locale type
+* canonical locale key
+* display qualifier
+* country / region / parent locale fields where applicable
 * public web origin
 * public API origin
 * operator/contact identity
@@ -163,7 +174,9 @@ Current v1 implementation:
 * Startup must create or update the configured locale row and open that locale's active cycle if no active cycle exists.
 * Proposal, review, voting, archive, outcome, appeal, reconsideration, discussion, and implementation endpoints must scope user-visible and moderator-visible records to the configured locale.
 * The World deployment may expose additional locale registry entries through `CK_LOCALE_REGISTRY_JSON` until a signed registry service exists.
+* Registry configuration must reject duplicate active entries with the same canonical key.
 * The web UI may show a compact locale directory when the registry contains more than one locale with a web origin.
+* Locale directory entries should show the simple brand name plus a qualifier when needed, such as **Castle Rock Keystone** with **Colorado, US** below it.
 * Locale instances must be launchable by environment configuration and helper scripts, not source-code edits.
 
 ### 4.5 Cross-locale accounts and sign-in
