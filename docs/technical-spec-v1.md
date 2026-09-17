@@ -112,6 +112,10 @@ User-facing sentence copy that names the active locale should render **World** a
 
 Primary in-app brand copy should prepend the active locale display name to Keystone, such as **World Keystone**, **Castle Rock Keystone**, or **Douglas County Keystone**. This is brand copy, so it should use **World Keystone**, not **the World Keystone**.
 
+The configured locale identity must drive the user-facing UI automatically. After a locale operator configures `CK_LOCALE_SLUG`, `CK_LOCALE_NAME`, `CK_LOCALE_TYPE`, public origins, and the matching web environment, the landing page, app heading, auth copy, tutorial locale prompts, source/trust surfaces, provenance metadata, registry metadata, and user-facing board prompts should use that locale without source-code edits.
+
+Hardcoded **World Keystone** copy should be limited to content that is intentionally describing the canonical global site, the global registry, or the trust relationship between local sites and World Keystone. A Castle Rock deployment, for example, should present itself as **Castle Rock Keystone** at the top of the landing page and app shell while still being allowed to explain that World Keystone is the central registry.
+
 ### 4.3 Localized deployment model
 
 The project should support a future model where a new locale instance can be spun up from the public repository with a small, documented configuration change rather than code edits.
@@ -137,6 +141,8 @@ The global site may route, link, deep-link, or eventually proxy users into a loc
 
 The public login/home surface should include a **Locales** dropdown when the registry contains more than one active destination. The dropdown should list active `canonical`, `official`, `authorized`, or `verified` locale entries and link to their public web origins. Lower-trust or non-active registry statuses may remain available through technical registry metadata, but should not be promoted as active public destinations.
 
+Locale directory links must be canonical browser-safe URLs. Path-hosted locale origins must include or be normalized to a trailing slash, such as `https://worldkeystone.com/locales/castle-rock/`, so browsers do not trigger internal-origin redirects or expose local service ports.
+
 The global locale registry should eventually include:
 
 * locale slug
@@ -160,7 +166,13 @@ Current v1 implementation:
 * The web UI may show a compact locale directory when the registry contains more than one locale with a web origin.
 * Locale instances must be launchable by environment configuration and helper scripts, not source-code edits.
 
-### 4.5 Brand portability
+### 4.5 Cross-locale accounts and sign-in
+
+World-operated locales should support one account and one sign-in session across those locales when they share the same operator, hostname trust boundary, runtime secret owner, and identity/session store. In that mode, user accounts, email verification, password reset state, sessions, and CSRF cookies are shared, while civic records remain scoped by locale through `locale_id`.
+
+Independent locale operators should not share raw production databases with World Keystone or with each other. For independent operators, the secure target is a central sign-in or federation flow operated by World Keystone, such as a future OAuth/OIDC-style account provider. Until that exists, independently operated locales may require separate accounts.
+
+### 4.6 Brand portability
 
 Localized deployments should preserve the Keystone product identity without confusing users about official status.
 
@@ -176,7 +188,7 @@ Examples:
 
 Community deployments may use the Keystone software under the project license, but they must clearly identify their locale, operator, source repository, and whether they are an official or community deployment. They must not imply they are the central official instance unless explicitly authorized.
 
-### 4.6 Product and distribution layers
+### 4.7 Product and distribution layers
 
 The project should distinguish the software, the canonical service, and local deployable instances as related but separate products.
 
@@ -192,7 +204,7 @@ The localized distributable should be different from the main global site by con
 
 This distinction lets the public repository remain transparent while the official global instance remains verifiable and while local communities can run their own properly labeled Keystone instances.
 
-### 4.7 Signed distributable releases and instance secrets
+### 4.8 Signed distributable releases and instance secrets
 
 Locale deployments should eventually be distributed as signed release artifacts or signed container images with a matching manifest.
 
@@ -245,7 +257,7 @@ Cryptographic methods, manifest formats, and verification code should be public.
 
 Encryption is useful for secrets, backups, operator handoff bundles, and protecting private runtime configuration. It should not be used as a promise that the open-source application code is hidden or unmodifiable. Under the AGPL/open-source model, modified deployments are allowed, but they must be distinguishable from signed official releases.
 
-### 4.8 First moderator bootstrap
+### 4.9 First moderator bootstrap
 
 A fresh locale deployment needs a safe way to create the first moderator.
 
@@ -261,7 +273,7 @@ The first moderator does not become an owner of the software or the brand. They 
 
 The current v1 HTTP bootstrap implementation is `POST /bootstrap/first-moderator`. It requires `CK_BOOTSTRAP_MODERATOR_TOKEN`, a 32+ character token supplied in the request body, and refuses all future bootstrap attempts after a verified moderator exists. The bootstrap action must be recorded in deployment audit events and exposed as completed in build/provenance metadata.
 
-### 4.9 Canonical instance and build provenance
+### 4.10 Canonical instance and build provenance
 
 There should be one central canonical instance operated by the project owner. That instance is the official reference deployment.
 
@@ -283,7 +295,7 @@ A hash alone is not enough to prove official integrity because anyone can hash a
 
 The target signing path is Sigstore Cosign with project-controlled CI identity and SLSA-style provenance. If the project later uses keyful signing through KMS or hardware custody, the public verification key should be published in the repository and from an official DNS or `/.well-known/` location. If verification material disagrees, the UI or deployment tooling should treat verification as failed.
 
-### 4.10 Tamper-evident official deployment
+### 4.11 Tamper-evident official deployment
 
 The long-term official deployment should be hardened so the public can tell whether it is running the expected software and whether important records have been altered unexpectedly.
 
@@ -300,7 +312,7 @@ This does not mean hiding the requirements or source code. Requirements remain p
 
 Forks can modify the open-source code, but they should be visibly distinct from the canonical deployment unless they can prove they are running an official signed release with only allowed locale/environment configuration changes.
 
-### 4.11 Licensing and brand separation requirements
+### 4.12 Licensing and brand separation requirements
 
 The repository software is licensed separately from the Collaborative Keystone name, logo, visual identity, and official project branding.
 

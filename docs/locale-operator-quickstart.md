@@ -212,22 +212,39 @@ Unsigned or modified community deployments remain allowed under AGPL, but they s
 
 ## One-Server Production Clone Pattern
 
-The current production-friendly clone path is one code checkout with one isolated runtime per locale:
+The current production-friendly clone path is one code checkout with one runtime per locale:
 
-- one PostgreSQL database per locale
 - one API systemd service per locale
 - one local nginx origin port per locale
 - one public hostname per locale, routed through Cloudflare Tunnel
 - one public registry entry on World Keystone for each active locale
+
+For World-operated locales that should share sign-in, use one shared identity/session database and scope civic records by `locale_id`. For independently operated locales, use an isolated database until a formal World Keystone sign-in federation flow exists.
 
 Example production layout:
 
 | Locale | Public origin | Local web origin | Local API | Database |
 | --- | --- | --- | --- | --- |
 | World | `https://worldkeystone.com` | `127.0.0.1:8088` | `127.0.0.1:8080` | `collaborative_keystone_prod` |
-| Castle Rock | `https://castle-rock.worldkeystone.com` | `127.0.0.1:8089` | `127.0.0.1:8081` | `collaborative_keystone_castle_rock` |
+| Castle Rock, World-operated SSO | `https://worldkeystone.com/locales/castle-rock/` | path under `127.0.0.1:8088` | `127.0.0.1:8081` | `collaborative_keystone_prod` |
+| Independent Castle Rock operator | `https://castle-rock.worldkeystone.com` | `127.0.0.1:8089` | `127.0.0.1:8081` | `collaborative_keystone_castle_rock` |
 
-If a new public hostname is not available yet, an early locale can also be proxied through the World hostname at a path such as `https://worldkeystone.com/locales/castle-rock`. In that case the locale must use distinct cookie names and a path-scoped cookie path, for example:
+If a new public hostname is not available yet, an early locale can also be proxied through the World hostname at a path such as `https://worldkeystone.com/locales/castle-rock/`.
+
+For a World-operated path-hosted locale that should share login with World Keystone, use the same database, same session secret, same cookie names, and root cookie path:
+
+```bash
+DATABASE_URL=postgres://.../collaborative_keystone_prod
+SESSION_SECRET=<same secret used by World Keystone>
+CK_SESSION_COOKIE_NAME=ck_session
+CK_CSRF_COOKIE_NAME=ck_csrf
+CK_COOKIE_PATH=/
+VITE_API_BASE_URL=/locales/castle-rock/api
+VITE_BASE_PATH=/locales/castle-rock/
+VITE_CSRF_COOKIE_NAME=ck_csrf
+```
+
+For an isolated path-hosted locale with separate accounts, use a separate database and distinct path-scoped cookies:
 
 ```bash
 CK_SESSION_COOKIE_NAME=ck_cr_session
@@ -287,7 +304,7 @@ After the service starts:
 4. Create or import the first verified moderator and record it in `deployment_audit_events`.
 5. Extend the first cycle only if there is a launch exception, and record the old/new deadlines in `deployment_audit_events`.
 6. Add Castle Rock to World Keystone's `CK_LOCALE_REGISTRY_JSON` and redeploy World.
-7. Confirm World Keystone's public **Locales** dropdown lists Castle Rock and links to its public origin.
+7. Confirm World Keystone's public **Locales** dropdown lists Castle Rock and links to its canonical public origin. Path-hosted locale origins should include a trailing slash.
 
 Cloudflare Tunnel must include one published application route per public hostname:
 

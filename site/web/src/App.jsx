@@ -828,6 +828,11 @@ function App() {
       setSourceInfo(sourceData);
       setBuildProvenance(provenanceData);
       setLocaleRegistry(registryData);
+      if (provenanceData?.locale?.name) {
+        setActiveLocaleName(provenanceData.locale.name);
+      } else if (registryData?.generated_for?.name) {
+        setActiveLocaleName(registryData.generated_for.name);
+      }
       setSourceInfoError("");
     } catch (error) {
       setSourceInfoError(error.message || "Source and build metadata unavailable.");
@@ -888,7 +893,6 @@ function App() {
     setSolutionTargetOptions([]);
     setSolutionOptions([]);
     setSolutionTargetIsPublishedWinner(false);
-    setActiveLocaleName(DEFAULT_LOCALE_NAME);
     setOutcomeData(null);
     setOutcomeResolveError("");
     setOutcomeResolveSuccess("");
@@ -2731,6 +2735,21 @@ function App() {
     return `${localeLabel} Keystone`;
   }
 
+  function normalizeLocaleDirectoryHref(value) {
+    const rawValue = String(value || "").trim();
+    if (!rawValue) return "#";
+
+    try {
+      const url = new URL(rawValue, window.location.origin);
+      if (url.pathname !== "/" && !url.pathname.endsWith("/")) {
+        url.pathname = `${url.pathname}/`;
+      }
+      return url.toString();
+    } catch {
+      return rawValue;
+    }
+  }
+
   function getActiveLocaleSentenceLabel() {
     const source =
       selectedProposal?.proposal ||
@@ -4084,7 +4103,7 @@ function App() {
           {localeDirectoryEntries.map((entry) => (
             <a
               key={`${entry.locale.slug}:${entry.web_origin}`}
-              href={entry.web_origin}
+              href={normalizeLocaleDirectoryHref(entry.web_origin)}
               target="_blank"
               rel="noreferrer"
             >
@@ -4138,16 +4157,21 @@ function App() {
   function renderAboutDisclosure() {
     const localeOperatorUrl = repositoryDocumentUrl(LOCALE_OPERATOR_DOC_PATH);
     const releaseProvenanceUrl = repositoryDocumentUrl(RELEASE_PROVENANCE_DOC_PATH);
+    const aboutLocaleLabel = activeLocaleName.trim() || DEFAULT_LOCALE_NAME;
+    const aboutBrandName = formatLocaleForBrand(aboutLocaleLabel);
+    const aboutIsWorld =
+      aboutLocaleLabel.toLowerCase() === DEFAULT_LOCALE_NAME.toLowerCase();
+    const aboutAudience = aboutIsWorld ? "people" : `people in ${aboutLocaleLabel}`;
 
     return (
       <details className="about-disclosure" id="about">
         <summary>About</summary>
         <div className="about-content">
           <section>
-            <h2>What does World Keystone do?</h2>
+            <h2>What does {aboutBrandName} do?</h2>
             <p>
-              World Keystone provides a platform for people to identify and
-              solve problems.
+              {aboutBrandName} provides a platform for {aboutAudience} to
+              identify and solve problems.
             </p>
             <p>
               Each month, people submit issues they think deserve attention.
@@ -4262,13 +4286,27 @@ function App() {
                 </p>
               </article>
               <article>
-                <h3>Is this only for the whole world?</h3>
-                <p>
-                  No. World Keystone is the central version and the trusted
-                  starting point. The long-term idea is that local versions can
-                  exist too, like Denver Keystone or Summit County Keystone, but
-                  people should discover and trust those through World Keystone.
-                </p>
+                {aboutIsWorld ? (
+                  <>
+                    <h3>Is this only for the whole world?</h3>
+                    <p>
+                      No. World Keystone is the central version and the trusted
+                      starting point. The long-term idea is that local versions
+                      can exist too, like Denver Keystone or Summit County
+                      Keystone, but people should discover and trust those
+                      through World Keystone.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <h3>How does this relate to World Keystone?</h3>
+                    <p>
+                      {aboutBrandName} is a local Keystone site. World Keystone
+                      is the central version and the trusted starting point
+                      where people discover and verify local Keystone sites.
+                    </p>
+                  </>
+                )}
               </article>
               <article>
                 <h3>What is a local Keystone site?</h3>
@@ -4420,7 +4458,7 @@ function App() {
     authMode === "resetRequest"
       ? "Enter your email and we will send you a password reset link."
       : authMode === "resetConfirm" && passwordResetLinkMode
-        ? "Choose a new password for your World Keystone account."
+        ? `Choose a new password for your ${brandName} account.`
         : authMode === "resetConfirm"
           ? "Enter the password reset code from your email."
           : "";

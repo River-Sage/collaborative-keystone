@@ -119,6 +119,8 @@ Localized deployments should use the in-app brand pattern `{Locale Display Name}
 
 Locale setup is driven by configuration and helper scripts rather than source edits. Required configuration includes the locale slug, display name, locale type, operator/contact identity, web origin, API origin, deployment status, registry status, and trust tier.
 
+The configured locale identity must flow into the user-facing product automatically. The landing page heading, signed-in app heading, auth/reset copy, tutorial locale prompts, source/trust display, provenance metadata, registry metadata, and board prompts should read from the configured locale. Source edits should not be required just to change **World Keystone** into **Castle Rock Keystone**.
+
 Current locale identity variables:
 
 - `CK_LOCALE_SLUG`
@@ -142,7 +144,11 @@ The current global site can expose configured registry entries through `CK_LOCAL
 
 The web UI should expose active registry entries through a public **Locales** dropdown on the login/home surface. Public directory entries should be limited to active trusted statuses such as `canonical`, `official`, `authorized`, and `verified`. Warning, suspended, compromised, abandoned, community, unverified, and development entries may remain visible in technical registry JSON, but should not be promoted as active public destinations.
 
+Path-hosted locale origins should be listed with a trailing slash, for example `https://worldkeystone.com/locales/castle-rock/`. The web UI should also normalize active directory links to that shape so a user does not hit internal-origin redirects such as local nginx ports.
+
 Direct locale origins may still exist for hosting, operations, and deep links, but a locale deployment should be considered trusted only through the global registry path.
+
+World-operated locales may share the canonical identity/session store so one login works across those locales. That mode should share user accounts, email verification, password reset state, sessions, session secrets, cookie names, and CSRF cookies while keeping civic data scoped by configured locale. Independent operators should use separate databases until a formal World Keystone sign-in federation flow exists; they should not be given raw shared database access.
 
 Community deployments must clearly distinguish themselves from the canonical official instance unless they are explicitly authorized to present as official.
 
