@@ -121,6 +121,8 @@ Locale setup is driven by configuration and helper scripts rather than source ed
 
 The configured locale identity must flow into the user-facing product automatically. The landing page heading, signed-in app heading, auth/reset copy, tutorial locale prompts, source/trust display, provenance metadata, registry metadata, and board prompts should read from the configured locale. Source edits should not be required just to change **World Keystone** into **Castle Rock Keystone**.
 
+The web build should set `VITE_LOCALE_NAME` to the same display name as `CK_LOCALE_NAME` so the first loading frame and browser title are localized before public API metadata returns.
+
 Current locale identity variables:
 
 - `CK_LOCALE_SLUG`

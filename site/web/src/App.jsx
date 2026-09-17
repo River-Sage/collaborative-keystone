@@ -106,7 +106,10 @@ const PROTOTYPE_ACCOUNTS = SHOW_PROTOTYPE_ACCOUNTS ? [
 const DEFAULT_AUTH_EMAIL = SHOW_PROTOTYPE_ACCOUNTS ? "user@example.com" : "";
 const FEED_ADVANCE_CLOSE_MS = 540;
 const FEED_ADVANCE_HIGHLIGHT_MS = 2160;
-const DEFAULT_LOCALE_NAME = "World";
+const WORLD_LOCALE_NAME = "World";
+const DEFAULT_LOCALE_NAME =
+  (import.meta.env.VITE_LOCALE_NAME || WORLD_LOCALE_NAME).trim() ||
+  WORLD_LOCALE_NAME;
 const DEFAULT_SOURCE_REPOSITORY_URL =
   "https://github.com/River-Sage/collaborative-keystone";
 const AGPL_LICENSE_URL = "https://www.gnu.org/licenses/agpl-3.0.en.html";
@@ -699,11 +702,16 @@ function App() {
   const [feedAdvanceLocked, setFeedAdvanceLocked] = useState(false);
 
   const canParticipate = Boolean(me?.email_verified);
+  const brandName = formatLocaleForBrand(activeLocaleName);
 
   useEffect(() => {
     initializeSession();
     loadPublicMetadata();
   }, []);
+
+  useEffect(() => {
+    document.title = brandName;
+  }, [brandName]);
 
   useEffect(() => {
     if (me?.email_verified) {
@@ -4036,9 +4044,8 @@ function App() {
     "{locale}",
     getActiveLocaleSentenceLabel()
   );
-  const brandName = formatLocaleForBrand(activeLocaleName);
   const isWorldLocale =
-    activeLocaleName.trim().toLowerCase() === DEFAULT_LOCALE_NAME.toLowerCase();
+    activeLocaleName.trim().toLowerCase() === WORLD_LOCALE_NAME.toLowerCase();
   const patreonUrl = isWorldLocale
     ? CONFIGURED_PATREON_URL || WORLD_PATREON_URL
     : "";
@@ -4160,7 +4167,7 @@ function App() {
     const aboutLocaleLabel = activeLocaleName.trim() || DEFAULT_LOCALE_NAME;
     const aboutBrandName = formatLocaleForBrand(aboutLocaleLabel);
     const aboutIsWorld =
-      aboutLocaleLabel.toLowerCase() === DEFAULT_LOCALE_NAME.toLowerCase();
+      aboutLocaleLabel.toLowerCase() === WORLD_LOCALE_NAME.toLowerCase();
     const aboutAudience = aboutIsWorld ? "people" : `people in ${aboutLocaleLabel}`;
 
     return (

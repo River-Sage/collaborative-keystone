@@ -240,6 +240,7 @@ CK_CSRF_COOKIE_NAME=ck_csrf
 CK_COOKIE_PATH=/
 VITE_API_BASE_URL=/locales/castle-rock/api
 VITE_BASE_PATH=/locales/castle-rock/
+VITE_LOCALE_NAME='Castle Rock'
 VITE_CSRF_COOKIE_NAME=ck_csrf
 ```
 
@@ -251,6 +252,7 @@ CK_CSRF_COOKIE_NAME=ck_cr_csrf
 CK_COOKIE_PATH=/locales/castle-rock
 VITE_API_BASE_URL=/locales/castle-rock/api
 VITE_BASE_PATH=/locales/castle-rock/
+VITE_LOCALE_NAME='Castle Rock'
 VITE_CSRF_COOKIE_NAME=ck_cr_csrf
 ```
 
