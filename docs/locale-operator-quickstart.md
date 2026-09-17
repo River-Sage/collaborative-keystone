@@ -209,3 +209,80 @@ Before a locale is listed as `authorized`, `official`, or `verified`, it should 
 - signed release provenance before strong verification claims
 
 Unsigned or modified community deployments remain allowed under AGPL, but they should be listed or presented as `community`, `unverified`, or `development`, not official.
+
+## One-Server Production Clone Pattern
+
+The current production-friendly clone path is one code checkout with one isolated runtime per locale:
+
+- one PostgreSQL database per locale
+- one API systemd service per locale
+- one local nginx origin port per locale
+- one public hostname per locale, routed through Cloudflare Tunnel
+- one public registry entry on World Keystone for each active locale
+
+Example production layout:
+
+| Locale | Public origin | Local web origin | Local API | Database |
+| --- | --- | --- | --- | --- |
+| World | `https://worldkeystone.com` | `127.0.0.1:8088` | `127.0.0.1:8080` | `collaborative_keystone_prod` |
+| Castle Rock | `https://castle-rock.worldkeystone.com` | `127.0.0.1:8089` | `127.0.0.1:8081` | `collaborative_keystone_castle_rock` |
+
+Each locale service should use the same release commit, but each locale gets its own environment file:
+
+```text
+/etc/world-keystone/api.env
+/etc/world-keystone/web.env
+/etc/castle-rock-keystone/api.env
+/etc/castle-rock-keystone/web.env
+```
+
+For web builds, prefer same-origin API routing:
+
+```text
+VITE_API_BASE_URL=/api
+```
+
+That lets the same web app pattern work under each hostname. Nginx then routes `/api/*` for that hostname to the matching locale API port.
+
+The locale API environment must identify the locale and public origins:
+
+```bash
+HOST=127.0.0.1
+PORT=8081
+APP_ENV=production
+WEB_ORIGIN=https://castle-rock.worldkeystone.com
+CORS_ALLOWED_ORIGINS=https://castle-rock.worldkeystone.com
+PUBLIC_WEB_ORIGIN=https://castle-rock.worldkeystone.com
+PUBLIC_API_ORIGIN=https://castle-rock.worldkeystone.com/api
+CK_LOCALE_SLUG=castle-rock
+CK_LOCALE_NAME='Castle Rock'
+CK_LOCALE_TYPE=municipality
+CK_DEPLOYMENT_KIND=locale
+CK_DEPLOYMENT_STATUS=authorized
+CK_REGISTRY_STATUS=verified
+CK_TRUST_TIER=unsigned
+CK_GLOBAL_REGISTRY_ORIGIN=https://worldkeystone.com
+CK_OPERATOR_NAME='World Keystone'
+CK_OPERATOR_CONTACT=ops@worldkeystone.com
+```
+
+Use the same mail and Turnstile provider settings as the canonical deployment unless the locale has its own verified mail domain and Turnstile widget.
+
+After the service starts:
+
+1. Confirm `https://castle-rock.worldkeystone.com/api/health` returns `ok`.
+2. Confirm `https://castle-rock.worldkeystone.com/api/.well-known/keystone-build.json` reports `locale.slug = castle-rock`.
+3. Confirm `https://castle-rock.worldkeystone.com/api/.well-known/keystone-locales.json` reports the Castle Rock locale.
+4. Create or import the first verified moderator and record it in `deployment_audit_events`.
+5. Extend the first cycle only if there is a launch exception, and record the old/new deadlines in `deployment_audit_events`.
+6. Add Castle Rock to World Keystone's `CK_LOCALE_REGISTRY_JSON` and redeploy World.
+7. Confirm World Keystone's public **Locales** dropdown lists Castle Rock and links to its public origin.
+
+Cloudflare Tunnel must include one published application route per public hostname:
+
+| Hostname | Service |
+| --- | --- |
+| `worldkeystone.com` | `http://localhost:8088` |
+| `castle-rock.worldkeystone.com` | `http://localhost:8089` |
+
+If the tunnel is dashboard-managed, this hostname route is created in the Cloudflare dashboard under the existing tunnel's **Published application routes**. If the tunnel is locally configured, add a matching ingress rule and restart `cloudflared`.

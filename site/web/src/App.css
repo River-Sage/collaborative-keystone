@@ -1135,18 +1135,43 @@ code {
   font-size: 0.86rem;
 }
 
-.locale-directory-panel {
+.locale-directory-disclosure {
   display: grid;
   gap: 10px;
   width: min(100%, 420px);
   margin: 12px auto 0;
-  padding: 12px;
-  background: #ffffff;
-  border: 1px solid #d7e2ea;
-  border-radius: var(--radius-panel);
+  color: #6b7e90;
+  font-size: 0.9rem;
+  text-align: center;
 }
 
-.source-info-panel .locale-directory-panel {
+.locale-directory-disclosure summary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  justify-self: center;
+  min-height: 34px;
+  padding: 7px 12px;
+  color: #50687c;
+  cursor: pointer;
+  user-select: none;
+  background: #ffffff;
+  border: 1px solid #d7e2ea;
+  border-radius: var(--radius-control);
+  box-shadow: 0 4px 10px rgba(41, 62, 84, 0.04);
+}
+
+.locale-directory-disclosure summary::-webkit-details-marker {
+  display: none;
+}
+
+.locale-directory-disclosure summary:hover {
+  color: #253748;
+  background: #f8fbfd;
+  border-color: #bfd2df;
+}
+
+.source-info-panel .locale-directory-disclosure {
   width: 100%;
   margin: 0;
 }
@@ -1154,6 +1179,11 @@ code {
 .locale-directory-list {
   display: grid;
   gap: 7px;
+  padding: 12px;
+  background: #ffffff;
+  border: 1px solid #d7e2ea;
+  border-radius: var(--radius-panel);
+  box-shadow: 0 12px 28px rgba(18, 28, 38, 0.04);
 }
 
 .locale-directory-list a {

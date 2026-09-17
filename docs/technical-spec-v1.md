@@ -135,6 +135,8 @@ The global site should act as the trusted entry point, locale directory, and pro
 
 The global site may route, link, deep-link, or eventually proxy users into a locale deployment, but the user-facing trust path starts from the canonical global site. Direct locale URLs may exist for operations, hosting, and deep links, but they should not be the primary discovery or trust mechanism.
 
+The public login/home surface should include a **Locales** dropdown when the registry contains more than one active destination. The dropdown should list active `canonical`, `official`, `authorized`, or `verified` locale entries and link to their public web origins. Lower-trust or non-active registry statuses may remain available through technical registry metadata, but should not be promoted as active public destinations.
+
 The global locale registry should eventually include:
 
 * locale slug

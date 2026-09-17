@@ -80,4 +80,5 @@ Each submission has its own Discussion panel. You may post one comment per submi
 - Moderators do not hard-delete ordinary proposals.
 - Implementation completion and cancellation require a future claim/review flow; moderator-stewards can update progress but cannot finalize an implementation alone.
 - The public login screen includes About, which summarizes the site flow, account requirements, voting visibility, implementations, local Keystone sites, and the public operator documents.
+- When active locale deployments are listed in the registry, the public login screen includes a Locales dropdown linking to those Keystone sites.
 - Source & Trust is available from the login screen and Settings tab so users can inspect source code, license, build details, locale data, and any third-party security check used for account flows.

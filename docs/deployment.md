@@ -86,7 +86,7 @@ API:
 
 Web build:
 
-- `VITE_API_BASE_URL=https://worldkeystone.com/api`
+- `VITE_API_BASE_URL=/api`
 - `VITE_TURNSTILE_SITE_KEY`
 - `VITE_PATREON_URL`
 
@@ -137,6 +137,8 @@ On startup, the API creates or updates the configured locale row and opens that 
 The central global Keystone site should be the user-facing entry point for accessing locale deployments. Users should choose or search for locale instances from the global site rather than having to discover separate locale URLs directly.
 
 The current global site can expose configured registry entries through `CK_LOCALE_REGISTRY_JSON`. This is suitable for development, staging, and early operator setup. The long-term global site should maintain signed locale registry entries containing each listed locale's display name, type, origins, operator/contact identity, deployment status, latest verified release, and provenance verification state.
+
+The web UI should expose active registry entries through a public **Locales** dropdown on the login/home surface. Public directory entries should be limited to active trusted statuses such as `canonical`, `official`, `authorized`, and `verified`. Warning, suspended, compromised, abandoned, community, unverified, and development entries may remain visible in technical registry JSON, but should not be promoted as active public destinations.
 
 Direct locale origins may still exist for hosting, operations, and deep links, but a locale deployment should be considered trusted only through the global registry path.
 

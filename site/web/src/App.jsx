@@ -132,6 +132,12 @@ const TRUST_STATUS_LABELS = {
   "signed-release": "Signed release",
   "signed-release-reproducible": "Reproducible release",
 };
+const ACTIVE_LOCALE_REGISTRY_STATUSES = new Set([
+  "canonical",
+  "official",
+  "authorized",
+  "verified",
+]);
 const TURNSTILE_SITE_KEY = (import.meta.env.VITE_TURNSTILE_SITE_KEY || "").trim();
 const WORLD_PATREON_URL = "https://patreon.com/worldkeystone";
 const CONFIGURED_PATREON_URL = (import.meta.env.VITE_PATREON_URL || "").trim();
@@ -4037,19 +4043,26 @@ function App() {
   const sourceTrustBody = isCanonicalDeployment
     ? "The source, license, build record, and locale directory stay public so people can check what they are using."
     : "Keystone sites publish source, license, build, and locale records so people can check what they are using.";
-  const localeDirectoryEntries = (localeRegistry?.entries || []).filter(
-    (entry) => entry?.locale?.name && entry?.web_origin
-  );
+  const localeDirectoryEntries = (localeRegistry?.entries || [])
+    .filter((entry) => {
+      const status = String(entry?.registry_status || "").toLowerCase();
+      return (
+        entry?.locale?.name &&
+        entry?.web_origin &&
+        ACTIVE_LOCALE_REGISTRY_STATUSES.has(status)
+      );
+    })
+    .sort((left, right) =>
+      String(left.locale.name).localeCompare(String(right.locale.name))
+    );
   const showLocaleDirectory = localeDirectoryEntries.length > 1;
 
   function renderLocaleDirectory() {
     if (!showLocaleDirectory) return null;
 
     return (
-      <div className="locale-directory-panel">
-        <div className="tool-section-header">
-          <h3>Locales</h3>
-        </div>
+      <details className="locale-directory-disclosure">
+        <summary>Locales</summary>
         <div className="locale-directory-list">
           {localeDirectoryEntries.map((entry) => (
             <a
@@ -4063,7 +4076,7 @@ function App() {
             </a>
           ))}
         </div>
-      </div>
+      </details>
     );
   }
 
